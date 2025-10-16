@@ -1,0 +1,27 @@
+app:
+  env: development
+  logLevel: info
+
+bitmex:
+  baseURL: https://www.bitmex.com
+  wsURL: wss://www.bitmex.com/realtime
+  timeoutMs: 15000
+
+trading:
+  symbol: XBTUSDT
+  leverage: 5
+
+telebot:
+  token: "6696236874:AAE3TRgzzvlpDuu2zeBWv6HxFlpYtd1M1zw"
+  chatID: 365357704
+
+candlesDump:
+  enabled: false
+  symbol: XBTUSD
+  binSize: 1m
+  count: 10
+  output: candles.csv
+  reverse: true
+
+
+
