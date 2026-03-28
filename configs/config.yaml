@@ -23,5 +23,17 @@ candlesDump:
   output: candles.csv
   reverse: true
 
+training:
+  enabled: true
+  model: "llama3.2:latest"
+  ollamaURL: "http://localhost:11434"
+  inputCandles: 20
+  outputCandles: 5
+  symbol: XBTUSD
+  binSize: 1m
+  trainingDataPath: "training_data.csv"
+  epochs: 10
+  learningRate: 0.001
+
 
 

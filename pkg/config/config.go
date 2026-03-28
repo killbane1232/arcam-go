@@ -36,12 +36,26 @@ type CandlesDump struct {
 	Reverse bool   `yaml:"reverse"` // BitMEX reverse=true отдаёт от новых к старым
 }
 
+type TrainingConfig struct {
+	Enabled          bool    `yaml:"enabled"`
+	Model            string  `yaml:"model"`
+	OllamaURL        string  `yaml:"ollamaURL"`
+	InputCandles     int     `yaml:"inputCandles"`
+	OutputCandles    int     `yaml:"outputCandles"`
+	Symbol           string  `yaml:"symbol"`
+	BinSize          string  `yaml:"binSize"`
+	TrainingDataPath string  `yaml:"trainingDataPath"`
+	Epochs           int     `yaml:"epochs"`
+	LearningRate     float64 `yaml:"learningRate"`
+}
+
 type Config struct {
-	App     AppConfig     `yaml:"app"`
-	Bitmex  BitmexConfig  `yaml:"bitmex"`
-	Trading TradingConfig `yaml:"trading"`
-	Telebot TelebotConfig `yaml:"telebot"`
-	Candles CandlesDump   `yaml:"candlesDump"`
+	App      AppConfig      `yaml:"app"`
+	Bitmex   BitmexConfig   `yaml:"bitmex"`
+	Trading  TradingConfig  `yaml:"trading"`
+	Telebot  TelebotConfig  `yaml:"telebot"`
+	Candles  CandlesDump    `yaml:"candlesDump"`
+	Training TrainingConfig `yaml:"training"`
 }
 
 // Load читает YAML-файл конфигурации по указанному пути
