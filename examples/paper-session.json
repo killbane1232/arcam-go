@@ -1,0 +1,16 @@
+{
+  "strategy_id": "trend-demo",
+  "version": 1,
+  "exchange": "binance_futures",
+  "mode": "paper",
+  "symbols": [
+    "BTCUSDT"
+  ],
+  "interval": "1h",
+  "capital": 1000,
+  "fee_bps": 4,
+  "slippage_bps": 2,
+  "max_order_notional": 100,
+  "allow_llm": false,
+  "max_llm_calls": 0
+}

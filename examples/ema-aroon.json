@@ -1,0 +1,90 @@
+{
+  "name": "Trend confirmation",
+  "description": "EMA 12/26 + Aroon 25. Independent long/short rules.",
+  "indicators": [
+    {
+      "id": "fast",
+      "type": "ema",
+      "period": 12
+    },
+    {
+      "id": "slow",
+      "type": "ema",
+      "period": 26
+    },
+    {
+      "id": "trend",
+      "type": "aroon",
+      "period": 25
+    }
+  ],
+  "rules": {
+    "enter_long": {
+      "all": [
+        {
+          "left": {
+            "field": "fast.value"
+          },
+          "op": "gt",
+          "right": {
+            "field": "slow.value"
+          }
+        },
+        {
+          "left": {
+            "field": "trend.up"
+          },
+          "op": "gt",
+          "right": {
+            "value": 70
+          }
+        }
+      ]
+    },
+    "exit_long": {
+      "left": {
+        "field": "fast.value"
+      },
+      "op": "lt",
+      "right": {
+        "field": "slow.value"
+      }
+    },
+    "enter_short": {
+      "all": [
+        {
+          "left": {
+            "field": "fast.value"
+          },
+          "op": "lt",
+          "right": {
+            "field": "slow.value"
+          }
+        },
+        {
+          "left": {
+            "field": "trend.down"
+          },
+          "op": "gt",
+          "right": {
+            "value": 70
+          }
+        }
+      ]
+    },
+    "exit_short": {
+      "left": {
+        "field": "fast.value"
+      },
+      "op": "gt",
+      "right": {
+        "field": "slow.value"
+      }
+    }
+  },
+  "risk": {
+    "position_fraction": 0.5,
+    "stop_loss": 0.03,
+    "take_profit": 0.06
+  }
+}

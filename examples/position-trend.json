@@ -1,0 +1,132 @@
+{
+  "name": "EMA + Aroon / position and opposite signal",
+  "description": "Enter only while flat. Exit on the opposite entry signal or the usual exit rule; re-entry requires a later decision.",
+  "indicators": [
+    {
+      "id": "fast",
+      "type": "ema",
+      "period": 12
+    },
+    {
+      "id": "slow",
+      "type": "ema",
+      "period": 26
+    },
+    {
+      "id": "trend",
+      "type": "aroon",
+      "period": 25
+    }
+  ],
+  "rules": {
+    "enter_long": {
+      "all": [
+        {
+          "position": "none"
+        },
+        {
+          "all": [
+            {
+              "left": {
+                "field": "fast.value"
+              },
+              "op": "gt",
+              "right": {
+                "field": "slow.value"
+              }
+            },
+            {
+              "left": {
+                "field": "trend.up"
+              },
+              "op": "gt",
+              "right": {
+                "value": 70
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "exit_long": {
+      "all": [
+        {
+          "position": "long"
+        },
+        {
+          "any": [
+            {
+              "left": {
+                "field": "fast.value"
+              },
+              "op": "lt",
+              "right": {
+                "field": "slow.value"
+              }
+            },
+            {
+              "signal": "enter_short"
+            }
+          ]
+        }
+      ]
+    },
+    "enter_short": {
+      "all": [
+        {
+          "position": "none"
+        },
+        {
+          "all": [
+            {
+              "left": {
+                "field": "fast.value"
+              },
+              "op": "lt",
+              "right": {
+                "field": "slow.value"
+              }
+            },
+            {
+              "left": {
+                "field": "trend.down"
+              },
+              "op": "gt",
+              "right": {
+                "value": 70
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "exit_short": {
+      "all": [
+        {
+          "position": "short"
+        },
+        {
+          "any": [
+            {
+              "left": {
+                "field": "fast.value"
+              },
+              "op": "gt",
+              "right": {
+                "field": "slow.value"
+              }
+            },
+            {
+              "signal": "enter_long"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "risk": {
+    "position_fraction": 0.5,
+    "stop_loss": 0.03,
+    "take_profit": 0.06
+  }
+}

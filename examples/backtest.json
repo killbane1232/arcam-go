@@ -1,0 +1,17 @@
+{
+  "strategy_id": "trend-demo",
+  "version": 1,
+  "source": "demo",
+  "symbols": [
+    "BTCUSDT",
+    "ETHUSDT"
+  ],
+  "interval": "1h",
+  "from": "2025-01-05T00:00:00Z",
+  "to": "2025-02-01T00:00:00Z",
+  "capital": 10000,
+  "fee_bps": 4,
+  "slippage_bps": 2,
+  "allow_llm": false,
+  "max_llm_calls": 0
+}

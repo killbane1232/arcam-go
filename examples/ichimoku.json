@@ -1,0 +1,101 @@
+{
+  "name": "Ichimoku cloud",
+  "description": "Price above/below the causal displaced cloud, confirmed by tenkan/kijun.",
+  "indicators": [
+    {
+      "id": "cloud",
+      "type": "ichimoku",
+      "fast": 9,
+      "slow": 26,
+      "period": 52,
+      "displacement": 26
+    }
+  ],
+  "rules": {
+    "enter_long": {
+      "all": [
+        {
+          "left": {
+            "field": "close"
+          },
+          "op": "gt",
+          "right": {
+            "field": "cloud.span_a"
+          }
+        },
+        {
+          "left": {
+            "field": "close"
+          },
+          "op": "gt",
+          "right": {
+            "field": "cloud.span_b"
+          }
+        },
+        {
+          "left": {
+            "field": "cloud.tenkan"
+          },
+          "op": "gt",
+          "right": {
+            "field": "cloud.kijun"
+          }
+        }
+      ]
+    },
+    "exit_long": {
+      "left": {
+        "field": "cloud.tenkan"
+      },
+      "op": "lt",
+      "right": {
+        "field": "cloud.kijun"
+      }
+    },
+    "enter_short": {
+      "all": [
+        {
+          "left": {
+            "field": "close"
+          },
+          "op": "lt",
+          "right": {
+            "field": "cloud.span_a"
+          }
+        },
+        {
+          "left": {
+            "field": "close"
+          },
+          "op": "lt",
+          "right": {
+            "field": "cloud.span_b"
+          }
+        },
+        {
+          "left": {
+            "field": "cloud.tenkan"
+          },
+          "op": "lt",
+          "right": {
+            "field": "cloud.kijun"
+          }
+        }
+      ]
+    },
+    "exit_short": {
+      "left": {
+        "field": "cloud.tenkan"
+      },
+      "op": "gt",
+      "right": {
+        "field": "cloud.kijun"
+      }
+    }
+  },
+  "risk": {
+    "position_fraction": 0.5,
+    "stop_loss": 0.03,
+    "take_profit": 0.06
+  }
+}

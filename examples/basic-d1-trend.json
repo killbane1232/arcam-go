@@ -1,0 +1,195 @@
+{
+  "name": "Basic trend / EMA + RSI + d1",
+  "description": "Research hypothesis: trend-following entries on 1h candles, filtered by RSI to avoid exhausted moves and by d1 support. Symmetric long/short; next-open execution; fixed stop/target. Parameters chosen before testing, no optimization or promise of profitability.",
+  "indicators": [
+    {
+      "id": "fast",
+      "type": "ema",
+      "period": 20
+    },
+    {
+      "id": "slow",
+      "type": "ema",
+      "period": 50
+    },
+    {
+      "id": "momentum",
+      "type": "rsi",
+      "period": 14
+    }
+  ],
+  "rules": {
+    "enter_long": {
+      "all": [
+        {
+          "left": {
+            "field": "fast.value"
+          },
+          "op": "gt",
+          "right": {
+            "field": "slow.value"
+          }
+        },
+        {
+          "left": {
+            "field": "close"
+          },
+          "op": "gt",
+          "right": {
+            "field": "fast.value"
+          }
+        },
+        {
+          "left": {
+            "field": "momentum.value"
+          },
+          "op": "gte",
+          "right": {
+            "value": 50
+          }
+        },
+        {
+          "left": {
+            "field": "momentum.value"
+          },
+          "op": "lt",
+          "right": {
+            "value": 70
+          }
+        },
+        {
+          "left": {
+            "field": "llm.enter_long"
+          },
+          "op": "gte",
+          "right": {
+            "value": 0.6
+          }
+        }
+      ]
+    },
+    "enter_short": {
+      "all": [
+        {
+          "left": {
+            "field": "fast.value"
+          },
+          "op": "lt",
+          "right": {
+            "field": "slow.value"
+          }
+        },
+        {
+          "left": {
+            "field": "close"
+          },
+          "op": "lt",
+          "right": {
+            "field": "fast.value"
+          }
+        },
+        {
+          "left": {
+            "field": "momentum.value"
+          },
+          "op": "lte",
+          "right": {
+            "value": 50
+          }
+        },
+        {
+          "left": {
+            "field": "momentum.value"
+          },
+          "op": "gt",
+          "right": {
+            "value": 30
+          }
+        },
+        {
+          "left": {
+            "field": "llm.enter_short"
+          },
+          "op": "gte",
+          "right": {
+            "value": 0.6
+          }
+        }
+      ]
+    },
+    "exit_long": {
+      "any": [
+        {
+          "left": {
+            "field": "fast.value"
+          },
+          "op": "lt",
+          "right": {
+            "field": "slow.value"
+          }
+        },
+        {
+          "left": {
+            "field": "momentum.value"
+          },
+          "op": "lt",
+          "right": {
+            "value": 45
+          }
+        },
+        {
+          "left": {
+            "field": "llm.exit_long"
+          },
+          "op": "gte",
+          "right": {
+            "value": 0.7
+          }
+        }
+      ]
+    },
+    "exit_short": {
+      "any": [
+        {
+          "left": {
+            "field": "fast.value"
+          },
+          "op": "gt",
+          "right": {
+            "field": "slow.value"
+          }
+        },
+        {
+          "left": {
+            "field": "momentum.value"
+          },
+          "op": "gt",
+          "right": {
+            "value": 55
+          }
+        },
+        {
+          "left": {
+            "field": "llm.exit_short"
+          },
+          "op": "gte",
+          "right": {
+            "value": 0.7
+          }
+        }
+      ]
+    }
+  },
+  "risk": {
+    "position_fraction": 0.2,
+    "stop_loss": 0.015,
+    "take_profit": 0.03
+  },
+  "llm": {
+    "provider": "ollama",
+    "protocol": "systemone",
+    "model": "d1:3b",
+    "lookback": 24,
+    "instructions": "Assess a short-term trend-following hypothesis using only the supplied closed 1h candles and indicators. fast.value is EMA20, slow.value is EMA50, momentum.value is RSI14. Long entry needs close > EMA20 > EMA50 and RSI in [50,70); short entry needs close < EMA20 < EMA50 and RSI in (30,50]. Judge whether the recent candle sequence supports continuation, considering pullbacks, rejection wicks and weakening momentum. Avoid strong entry support for conflicting or exhausted trends. Support exiting long on downward reversal or persistent loss of upward momentum; support exiting short on upward reversal or persistent loss of downward momentum. Assess evidence, not guaranteed future returns. Ignore calendar-date knowledge and never use future outcomes. Each action is scored independently; the engine handles position eligibility, entry threshold 0.60, exit threshold 0.70, 1.5% stop and 3% target."
+  }
+}

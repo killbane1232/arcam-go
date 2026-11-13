@@ -1,0 +1,13 @@
+interface:
+  display_name: "Arcam Research"
+  short_description: "Стратегии, бэктесты и диагностика MCP Arcam"
+  default_prompt: "Используй $arcam-research, чтобы проверить гипотезу стратегии в Arcam и объяснить результаты бэктеста."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "arcam"
+      description: "Arcam research MCP"
+
+policy:
+  allow_implicit_invocation: true
