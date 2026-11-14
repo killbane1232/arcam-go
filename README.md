@@ -33,7 +33,15 @@ Docker: `docker compose up --build`. Для Ollama на хосте задайт�
 
 `Dockerfile` собирает статический Go-бинарник и запускает его от UID/GID 10001, с CA-сертификатами, `/healthz` и постоянным томом `/data`. BuildKit поддерживает `linux/amd64` и `linux/arm64`; ключи и локальная история не попадают в build context/образ. Для bind mount каталог данных должен быть доступен UID 10001.
 
-В [.github/workflows/image.yml](.github/workflows/image.yml) настроены `go vet`, `go test -race` и сборка обеих архитектур. Pull request проверяет сборку без публикации; push в `main`/`master` или тега `v*` публикует в `ghcr.io/<owner>/<repo>`. Есть ручной запуск, SHA-теги, release-теги и `latest` для основной ветки. Actions закреплены на commit SHA. Для GHCR используется `GITHUB_TOKEN` с `packages: write`; в репозитории должны быть разрешены Actions и публикация пакетов. Сам файл workflow не создаёт GitHub-репозиторий и не отправляет код.
+В [.github/workflows/image.yml](.github/workflows/image.yml) настроены `go vet`, `go test -race` и сборка обеих архитектур после успешных проверок. В pull request образ собирается без публикации; push в `main`/`master` или тега `v*` публикует в `ghcr.io/<owner>/<repo>` (для этого репозитория — `ghcr.io/killbane1232/arcam-go`). Ручной запуск доступен через **Actions → Docker image → Run workflow**: публикация разрешена только для `main`/`master` и тегов `v*`, остальные ветки только проверяются.
+
+Образ получает тег ветки или релиза (например, `main` или `v1.2.3`), `sha-<полный SHA>` и `latest` для основной ветки. Слои сборки кэшируются в GitHub Actions; Actions закреплены на commit SHA. Для GHCR используется встроенный `GITHUB_TOKEN` с `packages: write`, дополнительные секреты не нужны; в репозитории должны быть разрешены Actions и публикация пакетов. Сам файл workflow не создаёт GitHub-репозиторий и не отправляет код.
+
+После первой успешной публикации образ можно скачать командой:
+
+```sh
+docker pull ghcr.io/killbane1232/arcam-go:latest
+```
 
 ## Возможности
 

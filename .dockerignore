@@ -1,0 +1,9 @@
+# Only send files needed by the Dockerfile to the builder.
+**
+!Dockerfile
+!go.mod
+!go.sum
+!cmd/
+!cmd/**
+!internal/
+!internal/**
