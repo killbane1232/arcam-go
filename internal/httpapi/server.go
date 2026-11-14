@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"strings"
@@ -238,15 +239,7 @@ func (s *Server) guard(next http.Handler) http.Handler {
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'")
-		host := r.Host
-		if h, _, e := net.SplitHostPort(host); e == nil {
-			host = h
-		}
-		allowed := host == "127.0.0.1" || host == "localhost" || host == "::1"
-		for _, h := range s.AllowedHosts {
-			allowed = allowed || host == h
-		}
-		if !allowed {
+		if !s.allowsHost(r.Host) {
 			failure(w, 403, fmt.Errorf("Host not allowed"))
 			return
 		}
@@ -277,6 +270,31 @@ func (s *Server) guard(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+func (s *Server) allowsHost(host string) bool {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	} else if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = host[1 : len(host)-1]
+	}
+	if host == "127.0.0.1" || host == "localhost" || host == "::1" {
+		return true
+	}
+	addr, _ := netip.ParseAddr(host)
+	for _, entry := range s.AllowedHosts {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if host == entry {
+			return true
+		}
+		// CIDRs match literal Host IPs; do not resolve DNS or inspect the client IP.
+		if prefix, err := netip.ParsePrefix(entry); err == nil && prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
 }
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 	if e := Decode(r.Body, v); e != nil {

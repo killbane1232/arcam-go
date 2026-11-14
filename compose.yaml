@@ -1,11 +1,12 @@
 services:
   arcam:
-    build: .
+    image: ${ARCAM_IMAGE:-ghcr.io/killbane1232/arcam-go:latest}
     ports:
-      - "127.0.0.1:8080:8080"
+      - "${ARCAM_BIND_ADDRESS:-127.0.0.1}:${ARCAM_PORT:-8080}:8080"
     env_file: .env
     environment:
       ARCAM_API_TOKEN: ${ARCAM_API_TOKEN:?Set ARCAM_API_TOKEN in .env before starting Docker}
+      ARCAM_ALLOWED_HOSTS: ${ARCAM_ALLOWED_HOSTS:-}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
     volumes:
       - arcam-data:/data
@@ -16,6 +17,7 @@ services:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
       interval: 30s
       timeout: 5s
+      start_period: 10s
       retries: 3
 volumes:
   arcam-data:

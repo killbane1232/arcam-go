@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
@@ -66,6 +67,83 @@ func TestHTTPGuardsAndStrictJSON(t *testing.T) {
 		}
 	}
 }
+func TestHTTPAllowedHostNetworks(t *testing.T) {
+	for _, tt := range []struct {
+		name, host, allowed string
+		want                int
+	}{
+		{"IPv4 subnet", "192.168.31.51:20000", "192.168.31.0/24", 204},
+		{"IPv4 subnet without port", "192.168.31.51", "192.168.31.0/24", 204},
+		{"IPv4 subnet lower boundary", "192.168.31.0", "192.168.31.0/24", 204},
+		{"IPv4 subnet upper boundary", "192.168.31.255", "192.168.31.0/24", 204},
+		{"below IPv4 subnet", "192.168.30.255", "192.168.31.0/24", 403},
+		{"above IPv4 subnet", "192.168.32.0", "192.168.31.0/24", 403},
+		{"single IP prefix", "192.168.31.51", "192.168.31.51/32", 204},
+		{"outside single IP prefix", "192.168.31.52", "192.168.31.51/32", 403},
+		{"IPv6 subnet", "[fd00:31::51]:20000", "fd00:31::/64", 204},
+		{"IPv6 subnet without port", "[fd00:31::51]", "fd00:31::/64", 204},
+		{"outside IPv6 subnet", "[fd00:32::51]:20000", "fd00:31::/64", 403},
+		{"IPv4 does not match IPv6 subnet", "192.168.31.51", "fd00:31::/64", 403},
+		{"DNS name does not match CIDR", "arcam.example.com:20000", "0.0.0.0/0,::/0", 403},
+		{"invalid prefix length", "192.168.31.51", "192.168.31.0/33", 403},
+		{"invalid prefix", "192.168.31.51", "192.168.31.0/invalid", 403},
+		{"exact IP", "192.168.31.51:20000", "192.168.31.51", 204},
+		{"exact domain", "arcam.example.com:20000", "arcam.example.com", 204},
+		{"mixed entries and whitespace", "192.168.31.51:20000", "arcam.example.com, 192.168.31.0/24 , fd00:31::/64", 204},
+		{"no configured hosts", "192.168.31.51", "", 403},
+		{"empty Host", "", " , ", 403},
+		{"localhost", "localhost:20000", "", 204},
+		{"IPv4 loopback", "127.0.0.1:20000", "", 204},
+		{"IPv6 loopback", "[::1]:20000", "", 204},
+		{"IPv6 loopback without port", "[::1]", "", 204},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &Server{AllowedHosts: strings.Split(tt.allowed, ",")}
+			handler := s.guard(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			r := httptest.NewRequest(http.MethodGet, "http://localhost/", nil)
+			r.Host = tt.host
+			// A client in the subnet must not authorize a different Host.
+			r.RemoteAddr = "192.168.31.51:12345"
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, r)
+			if w.Code != tt.want {
+				t.Fatalf("status %d, want %d: %s", w.Code, tt.want, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestHTTPNetworkHostAuthenticationAndOrigin(t *testing.T) {
+	s := &Server{Token: "secret", AllowedHosts: []string{"192.168.31.0/24"}}
+	handler := s.guard(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	for _, tt := range []struct {
+		name, token, origin string
+		want                int
+	}{
+		{"missing token", "", "", 401},
+		{"wrong token", "wrong", "", 401},
+		{"authenticated", "secret", "", 204},
+		{"same origin", "secret", "http://192.168.31.51:20000", 204},
+		{"other host in allowed subnet", "secret", "http://192.168.31.52:20000", 403},
+		{"different port", "secret", "http://192.168.31.51:8080", 403},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "http://192.168.31.51:20000/api/catalog", nil)
+			r.Header.Set("Authorization", "Bearer "+tt.token)
+			r.Header.Set("Origin", tt.origin)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, r)
+			if w.Code != tt.want {
+				t.Fatalf("status %d, want %d: %s", w.Code, tt.want, w.Body.String())
+			}
+		})
+	}
+}
+
 func TestMCPResearchFlow(t *testing.T) {
 	s := testServer(t)
 	httpServer := httptest.NewServer(s.Handler())
