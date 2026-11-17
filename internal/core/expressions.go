@@ -251,9 +251,14 @@ func addHistory(history []Operand, rows []map[string]float64, i int) {
 // state. Missing/skipped scores leave holes; the latest score is never reused.
 // The caller must pass nil after a gap in evaluated execution candles.
 func (s Strategy) ApplyPreviousLLMHistory(now, prev map[string]float64) {
+	s.ApplyPreviousRuntimeHistory(now, prev)
+}
+
+// ApplyPreviousRuntimeHistory shifts both LLM scores and captured setup fields.
+func (s Strategy) ApplyPreviousRuntimeHistory(now, prev map[string]float64) {
 	windows := map[string]int{}
 	s.operands(func(o *Operand) {
-		if strings.HasPrefix(o.Field, "llm.") {
+		if strings.HasPrefix(o.Field, "llm.") || strings.HasPrefix(o.Field, "setup.") {
 			windows[o.Field] = max(windows[o.Field], o.Offset)
 		}
 	})

@@ -231,7 +231,7 @@ func ResumeBacktest(ctx context.Context, s Strategy, r BacktestRequest, symbol s
 			if s.Risk.MaxEntriesPerDay > 0 && entriesToday >= s.Risk.MaxEntriesPerDay {
 				execution = &ExecutionAudit{Action: pending, Status: "skipped", Reason: "daily entry limit", Plan: pendingPlan}
 			} else {
-				pos, execution = executeEntry(s, r, pendingPlan, balance, bar)
+				pos, execution = SizeEntry(s, r, pendingPlan, balance, bar)
 				if pos.Side != "" {
 					balance -= pos.EntryFee
 					result.Metrics.Fees += pos.EntryFee
@@ -246,7 +246,7 @@ func ResumeBacktest(ctx context.Context, s Strategy, r BacktestRequest, symbol s
 			closePosition(price, bar.Time.Add(d), reason)
 		}
 		addHistory(history, f, i)
-		states = advanceSetups(s, states, f[i], prev, bar.Time.Add(d), d, pos.Side)
+		states = AdvanceSetups(s, states, f[i], prev, bar.Time.Add(d), d, pos.Side, true)
 		decision, e := ResolveDecision(ctx, s, c[:i+1], f[i], prev, symbol, pos.Side, enrich)
 		if e != nil {
 			return committed, e
@@ -260,23 +260,8 @@ func ResumeBacktest(ctx context.Context, s Strategy, r BacktestRequest, symbol s
 		}
 		last := bar.Time.Add(d).Equal(r.To)
 		if !last {
-			if decision.Action == "enter_long" || decision.Action == "enter_short" {
-				// Limits apply to the actual UTC fill day (the next open).
-				if s.Risk.MaxEntriesPerDay > 0 && decision.Time.UTC().Format("2006-01-02") == entryDay && entriesToday >= s.Risk.MaxEntriesPerDay {
-					decision.Action = "hold"
-					decision.Reason = "daily entry limit"
-				} else {
-					plan, reason := planEntry(s, decision, balance)
-					if reason != "" {
-						decision.Action = "hold"
-						decision.Reason = reason
-					} else {
-						plan.EventID = consumeSetups(states, decision.Rules[decision.Action])
-						pendingPlan = plan
-						decision.Plan = plan
-					}
-				}
-			}
+			PrepareEntryDecision(s, &decision, balance, states, entryDay, entriesToday)
+			pendingPlan = decision.Plan
 			pending = decision.Action
 		} else {
 			if decision.Action != "hold" {

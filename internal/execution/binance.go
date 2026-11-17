@@ -26,6 +26,7 @@ type Order struct {
 	ReduceOnly bool   `json:"reduce_only"`
 }
 type Receipt struct {
+	UpdateTime  int64  `json:"updateTime,omitempty"`
 	OrderID     int64  `json:"orderId"`
 	ClientID    string `json:"clientOrderId"`
 	Status      string `json:"status"`

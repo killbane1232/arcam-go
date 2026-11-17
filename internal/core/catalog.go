@@ -11,11 +11,12 @@ func DSLCatalog() map[string]any {
 		"offset_example":          Operand{Field: "high", Offset: 1},
 		"offset_semantics":        "0..10000 execution bars in the past; missing data, division by zero and overflow are unavailable",
 		"pivot":                   "left/right 1..1000; strict extrema; available only after right confirmation bars close; *_time identifies the reference bar, *_confirmation_bar identifies the confirming bar open",
-		"setups":                  "id, when, capture, expires_after, optional cancel/key; rule {setup:id}; captured fields setup.<id>.<name>; age 0 is the trigger bar, expiry is inclusive; explicit keys must increase; each event permits one next-open attempt",
+		"setups":                  "id, when, capture, expires_after, optional cancel/key; rule {setup:id}; captured fields setup.<id>.<name>; age 0 is the trigger bar, expiry is inclusive; explicit keys must increase; each event permits one entry attempt at the next frame boundary",
 		"risk_fields":             []string{"long.stop_price", "long.target_price", "short.stop_price", "short.target_price", "risk_fraction", "max_notional", "max_stop_fraction", "max_entries_per_day"},
-		"execution":               "next open; protection frozen at signal; risk sizing includes modeled fees/slippage; reject gaps beyond protection, excessive stop distance or risk-sized notional; stop wins simultaneous touches",
+		"execution":               "historical next open; protection frozen at signal; risk sizing includes modeled fees/slippage; reject gaps beyond protection, excessive stop distance or risk-sized notional; stop wins simultaneous touches",
 		"daily_limit":             "per pair, successful fills, UTC execution date",
-		"planned_execution_modes": []string{"backtest"},
+		"planned_execution_modes": []string{"backtest", "paper", "live"},
+		"session_execution":       "closed-bar setups and fixed plans; rule orders only in the first 5 seconds after a boundary; risk/quantity rechecked after broker rounding; confirmed fills retain protection; a risk-breaching fill is recorded before attempting reduce-only closure; local protection requires a running session",
 		"example":                 LevelsStrategy(),
 	}
 }

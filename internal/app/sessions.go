@@ -33,32 +33,40 @@ type SessionRequest struct {
 	MaxLLMCalls      int      `json:"max_llm_calls"`
 }
 type Intent struct {
-	Order  execution.Order `json:"order"`
-	Action string          `json:"action"`
-	Reason string          `json:"reason"`
-	At     time.Time       `json:"at"`
+	Plan          *core.EntryPlan `json:"plan,omitempty"`
+	BalanceBefore float64         `json:"balance_before,omitempty"`
+	SignalTime    time.Time       `json:"signal_time,omitempty"`
+	Order         execution.Order `json:"order"`
+	Action        string          `json:"action"`
+	Reason        string          `json:"reason"`
+	At            time.Time       `json:"at"`
 }
 type SessionEvent struct {
-	Symbol   string             `json:"symbol"`
-	Time     time.Time          `json:"time"`
-	Decision *core.Decision     `json:"decision,omitempty"`
-	Fill     *core.Fill         `json:"fill,omitempty"`
-	Receipt  *execution.Receipt `json:"receipt,omitempty"`
+	Execution *core.ExecutionAudit `json:"execution,omitempty"`
+	Trade     *core.Trade          `json:"trade,omitempty"`
+	Symbol    string               `json:"symbol"`
+	Time      time.Time            `json:"time"`
+	Decision  *core.Decision       `json:"decision,omitempty"`
+	Fill      *core.Fill           `json:"fill,omitempty"`
+	Receipt   *execution.Receipt   `json:"receipt,omitempty"`
 }
 type Session struct {
-	InputData  map[string][]core.Candle      `json:"input_data,omitempty"`
-	ID         string                        `json:"id"`
-	Status     string                        `json:"status"`
-	Error      string                        `json:"error,omitempty"`
-	CreatedAt  time.Time                     `json:"created_at"`
-	Request    SessionRequest                `json:"request"`
-	Strategy   core.Version                  `json:"strategy"`
-	Positions  map[string]core.Position      `json:"positions"`
-	Balances   map[string]float64            `json:"balances"`
-	LastCandle map[string]time.Time          `json:"last_candle"`
-	Previous   map[string]map[string]float64 `json:"previous"`
-	Pending    *Intent                       `json:"pending,omitempty"`
-	Events     []SessionEvent                `json:"events"`
+	Setups          map[string]map[string]core.SetupState `json:"setups,omitempty"`
+	Daily           map[string]DailyEntries               `json:"daily_entries,omitempty"`
+	EntryViolations map[string]string                     `json:"entry_violations,omitempty"`
+	InputData       map[string][]core.Candle              `json:"input_data,omitempty"`
+	ID              string                                `json:"id"`
+	Status          string                                `json:"status"`
+	Error           string                                `json:"error,omitempty"`
+	CreatedAt       time.Time                             `json:"created_at"`
+	Request         SessionRequest                        `json:"request"`
+	Strategy        core.Version                          `json:"strategy"`
+	Positions       map[string]core.Position              `json:"positions"`
+	Balances        map[string]float64                    `json:"balances"`
+	LastCandle      map[string]time.Time                  `json:"last_candle"`
+	Previous        map[string]map[string]float64         `json:"previous"`
+	Pending         *Intent                               `json:"pending,omitempty"`
+	Events          []SessionEvent                        `json:"events"`
 }
 type sessionWorker struct {
 	mu     sync.Mutex
@@ -172,9 +180,6 @@ func (m *Sessions) Start(ctx context.Context, r SessionRequest) (Session, error)
 	v, e := m.App.Store.Version(r.StrategyID, r.Version)
 	if e != nil {
 		return Session{}, e
-	}
-	if v.Strategy.RequiresPlannedExecution() {
-		return Session{}, fmt.Errorf("setups and planned risk are supported by historical backtests only")
 	}
 	if _, e := v.Strategy.WarmupBars(r.Interval); e != nil {
 		return Session{}, e
@@ -291,9 +296,6 @@ func (m *Sessions) tick(ctx context.Context, s *Session, enrich core.Enricher) e
 	step, _ := core.Interval(s.Request.Interval)
 	broker := m.Brokers[s.Request.Exchange]
 	strategy := s.Strategy.Strategy
-	if strategy.RequiresPlannedExecution() {
-		return fmt.Errorf("setups and planned risk are supported by historical backtests only")
-	}
 	warmup, e := strategy.WarmupBars(s.Request.Interval)
 	if e != nil {
 		return e
@@ -314,6 +316,12 @@ func (m *Sessions) tick(ctx context.Context, s *Session, enrich core.Enricher) e
 			}
 		}
 		position := s.Positions[symbol]
+		if position.Side != "" && s.EntryViolations[symbol] != "" {
+			if e = m.closeEntryViolation(ctx, s, symbol); e != nil {
+				return e
+			}
+			continue
+		}
 		if position.Side != "" {
 			bar := core.Candle{Open: quote, High: quote, Low: quote, Close: quote}
 			if _, reason := core.RiskExit(position, bar, strategy.Risk); reason != "" {
@@ -335,22 +343,28 @@ func (m *Sessions) tick(ctx context.Context, s *Session, enrich core.Enricher) e
 		if e != nil {
 			return e
 		}
-		current := features[len(features)-1]
-		previous := s.Previous[symbol]
-		if previous == nil || !s.LastCandle[symbol].Equal(last.Add(-step)) {
-			previous = features[len(features)-2]
-		}
-		strategy.ApplyPreviousLLMHistory(current, previous)
+		current, previous, states := sessionSetupFeatures(s, symbol, features, bars, step, position.Side)
 		decision, e := core.ResolveDecision(ctx, strategy, bars, current, previous, symbol, position.Side, enrich)
 		if e != nil {
 			return e
 		}
 		decision.Time = end
+		daily := sessionDay(s, symbol, end)
+		decision.EntryDay, decision.EntriesToday = daily.Day, daily.Count
+		core.PrepareEntryDecision(strategy, &decision, s.Balances[symbol], states, daily.Day, daily.Count)
+		decision.Setups = states
+		if s.Setups == nil {
+			s.Setups = map[string]map[string]core.SetupState{}
+		}
+		s.Setups[symbol] = states
 		s.LastCandle[symbol] = last
 		s.Previous[symbol] = current
 		if !m.withinSessionFrame(end) {
 			decision.Action = "hold"
 			decision.Reason = missedSessionFrameReason
+			if decision.Plan != nil {
+				decision.Execution = &core.ExecutionAudit{Action: "enter_" + decision.Plan.Side, Status: "skipped", Reason: missedSessionFrameReason, Plan: decision.Plan}
+			}
 		}
 		s.Events = append(s.Events, SessionEvent{Symbol: symbol, Time: end, Decision: &decision})
 		trimEvents(s)
@@ -363,12 +377,15 @@ func (m *Sessions) tick(ctx context.Context, s *Session, enrich core.Enricher) e
 			if e != nil {
 				return e
 			}
-			if e = m.fill(ctx, s, symbol, decision.Action, quote, "strategy", end); e != nil {
+			if e = m.fillWithPlan(ctx, s, symbol, decision.Action, quote, "strategy", end, decision.Plan); e != nil {
 				if !errors.Is(e, errMissedSessionFrame) {
 					return e
 				}
 				decision.Action = "hold"
 				decision.Reason = missedSessionFrameReason
+				if decision.Plan != nil {
+					decision.Execution = &core.ExecutionAudit{Action: "enter_" + decision.Plan.Side, Status: "skipped", Reason: missedSessionFrameReason, Plan: decision.Plan}
+				}
 				if e = m.App.Store.Put("sessions", s.ID, s); e != nil {
 					return e
 				}
@@ -393,121 +410,59 @@ func (m *Sessions) matchPosition(ctx context.Context, s *Session, symbol string)
 	return nil
 }
 func (m *Sessions) fill(ctx context.Context, s *Session, symbol, action string, quote float64, reason string, signalTime time.Time) error {
-	if reason == "strategy" && !m.withinSessionFrame(signalTime) {
-		return errMissedSessionFrame
-	}
-	p := s.Positions[symbol]
-	entry := strings.HasPrefix(action, "enter_")
-	buy := action == "enter_long" || action == "exit_short"
-	qty := p.Quantity
-	if entry {
-		if p.Side != "" {
-			return fmt.Errorf("position already open")
-		}
-		notional := math.Min(s.Balances[symbol]*s.Strategy.Strategy.Risk.PositionFraction, s.Request.MaxOrderNotional)
-		qty = notional / (quote * (1 + s.Request.FeeBPS/10000))
-		if qty <= 0 {
-			return fmt.Errorf("insufficient paper capital")
-		}
-	} else if p.Side == "" {
-		return nil
-	}
-	side := "SELL"
-	if buy {
-		side = "BUY"
-	}
-	intent := Intent{Order: execution.Order{Symbol: symbol, Side: side, Quantity: strconv.FormatFloat(qty, 'f', 12, 64), ReduceOnly: !entry, ClientID: "arc-" + store.Hash([]string{s.ID, symbol, action, signalTime.Format(time.RFC3339Nano)})[:28]}, Action: action, Reason: reason, At: m.nowUTC()}
-	if s.Request.Mode == "paper" {
-		price := core.Slipped(quote, s.Request.SlippageBPS, buy)
-		if entry {
-			qty = math.Min(s.Balances[symbol]*s.Strategy.Strategy.Risk.PositionFraction, s.Request.MaxOrderNotional) / (price * (1 + s.Request.FeeBPS/10000))
-		}
-		m.applyFill(s, intent, qty, price, nil)
-		return m.App.Store.Put("sessions", s.ID, s)
-	}
-	if !m.LiveEnabled {
-		return fmt.Errorf("live execution is disabled")
-	}
-	broker := m.Brokers[s.Request.Exchange]
-	if e := m.matchPosition(ctx, s, symbol); e != nil {
-		return e
-	}
-	if e := broker.CheckAccount(ctx, []string{symbol}); e != nil {
-		return e
-	}
-	order, e := broker.Prepare(ctx, intent.Order, quote)
-	if e != nil {
-		return e
-	}
-	if reason == "strategy" && !m.withinSessionFrame(signalTime) {
-		return errMissedSessionFrame
-	}
-	intent.Order = order
-	intent.At = m.nowUTC()
-	s.Pending = &intent
-	if e = m.App.Store.Put("sessions", s.ID, s); e != nil {
-		return e
-	}
-	if reason == "strategy" {
-		if !m.withinSessionFrame(signalTime) {
-			s.Pending = nil
-			if e = m.App.Store.Put("sessions", s.ID, s); e != nil {
-				return e
-			}
-			return errMissedSessionFrame
-		}
-		// If submission times out, retain the durable intent for reconciliation:
-		// cancellation cannot prove that the exchange did not receive the order.
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, signalTime.Add(sessionFrameWindow).Sub(m.nowUTC()))
-		defer cancel()
-	}
-	receipt, e := broker.Submit(ctx, order)
-	if e != nil {
-		return e
-	}
-	return m.complete(s, receipt)
+	return m.fillWithPlan(ctx, s, symbol, action, quote, reason, signalTime, nil)
 }
+
 func (m *Sessions) complete(s *Session, r execution.Receipt) error {
 	if s.Pending == nil {
 		return fmt.Errorf("no pending order")
 	}
-	if r.ClientID != s.Pending.Order.ClientID {
+	in := *s.Pending
+	if r.ClientID != in.Order.ClientID {
 		return fmt.Errorf("order response client ID mismatch")
 	}
-	if r.Status != "FILLED" {
+	terminal := r.Status == "CANCELED" || r.Status == "EXPIRED" || r.Status == "REJECTED" || r.Status == "EXPIRED_IN_MATCH"
+	if r.Status != "FILLED" && !terminal {
 		return fmt.Errorf("order %s is %s; reconcile before resuming", r.ClientID, r.Status)
 	}
 	qty, e := strconv.ParseFloat(r.ExecutedQty, 64)
-	if e != nil || !core.Finite(qty) || qty <= 0 {
+	if e != nil || !core.Finite(qty) || qty < 0 || !terminal && qty == 0 {
 		return fmt.Errorf("invalid executed quantity")
+	}
+	wanted, e := strconv.ParseFloat(in.Order.Quantity, 64)
+	if e != nil || !core.Finite(wanted) || wanted <= 0 || qty > wanted+math.Max(1e-10, wanted*1e-8) || !terminal && math.Abs(wanted-qty) > math.Max(1e-10, wanted*1e-8) {
+		return fmt.Errorf("filled quantity differs from requested quantity")
+	}
+	if terminal && qty == 0 {
+		audit := &core.ExecutionAudit{Action: in.Action, Status: "skipped", Reason: "order " + r.Status, Plan: in.Plan}
+		decisionExecution(s, in.Order.Symbol, in.SignalTime, audit)
+		s.Events = append(s.Events, SessionEvent{Symbol: in.Order.Symbol, Time: m.nowUTC(), Execution: audit, Receipt: &r})
+		trimEvents(s)
+		s.Pending = nil
+		if e = m.App.Store.Put("sessions", s.ID, s); e != nil {
+			return e
+		}
+		if in.Order.ReduceOnly {
+			return fmt.Errorf("exit order %s is %s without execution; position retained", r.ClientID, r.Status)
+		}
+		return nil
 	}
 	price, e := strconv.ParseFloat(r.AvgPrice, 64)
 	if e != nil || !core.Finite(price) || price <= 0 {
 		return fmt.Errorf("invalid fill price")
 	}
-	wanted, e := strconv.ParseFloat(s.Pending.Order.Quantity, 64)
-	if e != nil || math.Abs(wanted-qty) > math.Max(1e-10, wanted*1e-8) {
-		return fmt.Errorf("filled quantity differs from requested quantity")
+	if strings.HasPrefix(in.Action, "enter_") && s.Strategy.Strategy.RequiresPlannedExecution() && in.Plan == nil {
+		return fmt.Errorf("missing frozen plan for confirmed entry")
 	}
-	m.applyFill(s, *s.Pending, qty, price, &r)
+	if r.UpdateTime > 0 {
+		in.At = time.UnixMilli(r.UpdateTime).UTC()
+	}
+	if !strings.HasPrefix(in.Action, "enter_") && qty < s.Positions[in.Order.Symbol].Quantity-math.Max(1e-10, wanted*1e-8) {
+		return fmt.Errorf("partial exit requires reconciliation; protection and intent retained")
+	}
+	m.applyFill(s, in, qty, price, &r)
 	s.Pending = nil
 	return m.App.Store.Put("sessions", s.ID, s)
-}
-func (m *Sessions) applyFill(s *Session, in Intent, qty, price float64, receipt *execution.Receipt) {
-	symbol := in.Order.Symbol
-	fee := qty * price * s.Request.FeeBPS / 10000
-	if strings.HasPrefix(in.Action, "enter_") {
-		side := strings.TrimPrefix(in.Action, "enter_")
-		s.Positions[symbol] = core.Position{Side: side, Entry: price, Quantity: qty, EntryFee: fee, Time: in.At}
-		s.Balances[symbol] -= fee
-	} else {
-		p := s.Positions[symbol]
-		s.Balances[symbol] += p.PnL(price) - fee
-		s.Positions[symbol] = core.Position{}
-	}
-	s.Events = append(s.Events, SessionEvent{Symbol: symbol, Time: in.At, Fill: &core.Fill{Time: in.At, Action: in.Action, Price: price, Quantity: qty, Reason: in.Reason}, Receipt: receipt})
-	trimEvents(s)
 }
 func trimEvents(s *Session) {
 	if len(s.Events) > 5000 {
@@ -562,6 +517,15 @@ func (m *Sessions) Command(ctx context.Context, id, action string) (Session, err
 			return s, e
 		}
 	}
+	if action == "reconcile" && s.Pending == nil {
+		for _, sym := range s.Request.Symbols {
+			if s.EntryViolations[sym] != "" {
+				if e := m.closeEntryViolation(ctx, &s, sym); e != nil {
+					return s, e
+				}
+			}
+		}
+	}
 	if s.Request.Mode == "live" {
 		for _, sym := range s.Request.Symbols {
 			if e := m.matchPosition(ctx, &s, sym); e != nil {
@@ -591,7 +555,6 @@ func (m *Sessions) Command(ctx context.Context, id, action string) (Session, err
 			return s, fmt.Errorf("maximum 10 running sessions")
 		}
 		s.Status = "running"
-		s.Previous = map[string]map[string]float64{}
 	}
 	if e := m.App.Store.Put("sessions", id, s); e != nil {
 		return s, e

@@ -39,7 +39,9 @@ func injectSetup(f map[string]float64, id string, state SetupState, at time.Time
 	}
 }
 
-func advanceSetups(s Strategy, old map[string]SetupState, now, prev map[string]float64, at time.Time, step time.Duration, side string) map[string]SetupState {
+// AdvanceSetups evaluates only closed-bar inputs. When arm is false (missed
+// session frames), new events are recorded as missed instead of being armed.
+func AdvanceSetups(s Strategy, old map[string]SetupState, now, prev map[string]float64, at time.Time, step time.Duration, side string, arm bool) map[string]SetupState {
 	if len(s.Setups) == 0 {
 		return nil
 	}
@@ -91,6 +93,10 @@ func advanceSetups(s Strategy, old map[string]SetupState, now, prev map[string]f
 			}
 			if ready {
 				state = SetupState{Status: "waiting", WasTrue: matched, HasKey: true, LastKey: key, EventID: fmt.Sprintf("%s:%g", setup.ID, key), ReferenceTime: at, ExpiresAt: at.Add(time.Duration(setup.ExpiresAfter) * step), Captured: captured}
+				if !arm {
+					state.Status = "missed"
+					state.Reason = "setup formed while session was inactive"
+				}
 				injectSetup(now, setup.ID, state, at, step)
 				if setup.Cancel != nil {
 					t := evaluate(setup.Cancel, now, prev, ctx)
@@ -119,7 +125,9 @@ func matchedSetups(t Trace, ids map[string]bool) {
 		matchedSetups(child, ids)
 	}
 }
-func consumeSetups(states map[string]SetupState, t Trace) string {
+
+// ConsumeSetups consumes only successful setup branches of the chosen entry.
+func ConsumeSetups(states map[string]SetupState, t Trace) string {
 	ids := map[string]bool{}
 	matchedSetups(t, ids)
 	// Iterate trace order for stable audit IDs rather than map order.

@@ -226,7 +226,7 @@ func TestSessionWorkerOwnsReturnedData(t *testing.T) {
 	}
 }
 
-func TestSessionsRejectHistoricalExecutionPlans(t *testing.T) {
+func TestSessionsAcceptExecutionPlans(t *testing.T) {
 	s := testApp(t)
 	v, e := s.Store.SaveVersion("levels-session", core.LevelsStrategy())
 	if e != nil {
@@ -235,13 +235,17 @@ func TestSessionsRejectHistoricalExecutionPlans(t *testing.T) {
 	s.Sources["fake"] = fakeSource{}
 	b := &fakeBroker{t: t}
 	m := &Sessions{App: s, LiveEnabled: true, MaxLiveNotional: 100, workers: map[string]*sessionWorker{}, Brokers: map[string]execution.Broker{"fake": b}}
+	s.Sessions = m
 	for _, mode := range []string{"paper", "live"} {
-		_, e = m.Start(context.Background(), SessionRequest{StrategyID: v.ID, Version: v.Version, Exchange: "fake", Mode: mode, Symbols: []string{"BTCUSDT"}, Interval: "1h", Capital: 1000, MaxOrderNotional: 100})
-		if e == nil || e.Error() != "setups and planned risk are supported by historical backtests only" {
+		out, e := m.Start(context.Background(), SessionRequest{StrategyID: v.ID, Version: v.Version, Exchange: "fake", Mode: mode, Symbols: []string{"BTCUSDT"}, Interval: "1h", Capital: 1000, MaxOrderNotional: 100})
+		if e != nil {
 			t.Fatal(mode, e)
+		}
+		if e = m.Pause(out.ID); e != nil {
+			t.Fatal(e)
 		}
 	}
 	if b.submit != 0 {
-		t.Fatal("submitted unsupported strategy")
+		t.Fatal("fixture has no entry signal")
 	}
 }

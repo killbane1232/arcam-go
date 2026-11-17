@@ -108,8 +108,8 @@ func validateExtensions(s Strategy) error {
 	return nil
 }
 
-// Sessions execute at observed quotes, not historical next opens. Do not
-// silently apply historical execution plans to the real-order adapter.
+// RequiresPlannedExecution identifies strategies whose saved entries require
+// an explicit plan; legacy percentage-only checkpoints can be reconstructed.
 func (s Strategy) RequiresPlannedExecution() bool {
 	return len(s.Setups) > 0 || s.Risk.Long != nil || s.Risk.Short != nil || s.Risk.RiskFraction > 0 || s.Risk.MaxNotional > 0 || s.Risk.MaxStopFraction > 0 || s.Risk.MaxEntriesPerDay > 0
 }
