@@ -5,16 +5,6 @@ import (
 	"strings"
 )
 
-func operand(o *Operand, f map[string]float64) (float64, bool) {
-	if o == nil {
-		return 0, false
-	}
-	if o.Value != nil {
-		return *o.Value, true
-	}
-	v, ok := f[o.Field]
-	return v, ok && Finite(v)
-}
 func Evaluate(r *Rule, now, prev map[string]float64) Trace {
 	return evaluate(r, now, prev, ruleContext{position: "none"})
 }
@@ -25,7 +15,6 @@ type ruleContext struct {
 	allowLLM bool
 }
 
-func llmOperand(o *Operand) bool { return o != nil && strings.HasPrefix(o.Field, "llm.") }
 func usesLLM(r *Rule, rules Rules) bool {
 	if r == nil {
 		return false
@@ -55,6 +44,8 @@ func ruleLabel(r *Rule) string {
 	switch {
 	case r == nil:
 		return "disabled"
+	case r.Setup != "":
+		return "setup " + r.Setup
 	case r.Position != "":
 		return "position == " + r.Position
 	case r.Signal != "":
@@ -73,6 +64,10 @@ func ruleLabel(r *Rule) string {
 func evaluate(r *Rule, now, prev map[string]float64, ctx ruleContext) Trace {
 	if r == nil {
 		return Trace{Rule: "disabled", Ready: true}
+	}
+	if r.Setup != "" {
+		v, ok := now["setup."+r.Setup+".active"]
+		return Trace{Rule: "setup " + r.Setup, Setup: r.Setup, Ready: ok, Result: ok && v == 1}
 	}
 	if r.Position != "" {
 		return Trace{Rule: fmt.Sprintf("position == %s (actual: %s)", r.Position, ctx.position), Ready: true, Result: r.Position == ctx.position}
@@ -144,14 +139,14 @@ func evaluate(r *Rule, now, prev map[string]float64, ctx ruleContext) Trace {
 		t.Right = &b
 	}
 	// Missing ordinary indicators cannot be repaired by an LLM response.
-	if (!ok && !llmOperand(r.Left)) || (!ok2 && !llmOperand(r.Right)) {
+	if missingOrdinary(r.Left, now) || missingOrdinary(r.Right, now) {
 		t.Reason = "indicator value unavailable"
 		return t
 	}
 	crossing := r.Op == "crosses_above" || r.Op == "crosses_below"
 	p, pok := operand(r.Left, prev)
 	q, qok := operand(r.Right, prev)
-	if crossing && ((!pok && !llmOperand(r.Left)) || (!qok && !llmOperand(r.Right))) {
+	if crossing && (missingOrdinary(r.Left, prev) || missingOrdinary(r.Right, prev)) {
 		t.Ready = false
 		t.Reason = "previous indicator value unavailable"
 		return t
@@ -190,7 +185,14 @@ func label(o *Operand) string {
 		return "?"
 	}
 	if o.Field != "" {
-		return o.Field
+		return historyKey(o.Field, o.Offset)
+	}
+	if o.Op != "" {
+		args := []string{}
+		for i := range o.Args {
+			args = append(args, label(&o.Args[i]))
+		}
+		return o.Op + "(" + strings.Join(args, ", ") + ")"
 	}
 	if o.Value == nil {
 		return "?"

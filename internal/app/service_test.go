@@ -225,3 +225,23 @@ func TestSessionWorkerOwnsReturnedData(t *testing.T) {
 		t.Fatal("caller mutated active worker")
 	}
 }
+
+func TestSessionsRejectHistoricalExecutionPlans(t *testing.T) {
+	s := testApp(t)
+	v, e := s.Store.SaveVersion("levels-session", core.LevelsStrategy())
+	if e != nil {
+		t.Fatal(e)
+	}
+	s.Sources["fake"] = fakeSource{}
+	b := &fakeBroker{t: t}
+	m := &Sessions{App: s, LiveEnabled: true, MaxLiveNotional: 100, workers: map[string]*sessionWorker{}, Brokers: map[string]execution.Broker{"fake": b}}
+	for _, mode := range []string{"paper", "live"} {
+		_, e = m.Start(context.Background(), SessionRequest{StrategyID: v.ID, Version: v.Version, Exchange: "fake", Mode: mode, Symbols: []string{"BTCUSDT"}, Interval: "1h", Capital: 1000, MaxOrderNotional: 100})
+		if e == nil || e.Error() != "setups and planned risk are supported by historical backtests only" {
+			t.Fatal(mode, e)
+		}
+	}
+	if b.submit != 0 {
+		t.Fatal("submitted unsupported strategy")
+	}
+}

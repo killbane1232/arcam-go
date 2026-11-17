@@ -146,7 +146,11 @@ func (s *Service) StartRun(r core.BacktestRequest) (core.Run, error) {
 	// Freeze available values now; missing exchange history is filled by the job.
 	input := map[string][]core.Candle{}
 	step, _ := core.Interval(r.Interval)
-	from := r.From.Add(-time.Duration(v.Strategy.Warmup()) * step)
+	warmup, e := v.Strategy.WarmupBars(r.Interval)
+	if e != nil {
+		return core.Run{}, e
+	}
+	from := r.From.Add(-time.Duration(warmup) * step)
 	needsHistory := false
 	for _, symbol := range r.Symbols {
 		bars, e := s.cachedRange(s.ctx, r.Source, symbol, r.Interval, from, r.To)

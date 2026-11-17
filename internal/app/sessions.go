@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -45,6 +46,7 @@ type SessionEvent struct {
 	Receipt  *execution.Receipt `json:"receipt,omitempty"`
 }
 type Session struct {
+	InputData  map[string][]core.Candle      `json:"input_data,omitempty"`
 	ID         string                        `json:"id"`
 	Status     string                        `json:"status"`
 	Error      string                        `json:"error,omitempty"`
@@ -65,6 +67,7 @@ type sessionWorker struct {
 	enrich core.Enricher
 }
 type Sessions struct {
+	now             func() time.Time // Injectable clock; nil uses the wall clock.
 	App             *Service
 	Brokers         map[string]execution.Broker
 	LiveEnabled     bool
@@ -72,6 +75,13 @@ type Sessions struct {
 	mu              sync.Mutex
 	control         sync.Mutex
 	workers         map[string]*sessionWorker
+}
+
+func (m *Sessions) nowUTC() time.Time {
+	if m.now != nil {
+		return m.now().UTC()
+	}
+	return time.Now().UTC()
 }
 
 func NewSessions(s *Service) (*Sessions, error) {
@@ -130,6 +140,7 @@ func (m *Sessions) List() ([]Session, error) {
 			return nil, e
 		}
 		s.Events = nil
+		s.InputData = nil
 		s.Previous = nil
 		out = append(out, s)
 	}
@@ -153,13 +164,19 @@ func (m *Sessions) Start(ctx context.Context, r SessionRequest) (Session, error)
 	if e != nil {
 		return Session{}, e
 	}
-	now := time.Now().UTC().Truncate(step)
+	now := m.nowUTC().Truncate(step)
 	check := core.BacktestRequest{StrategyID: r.StrategyID, Version: r.Version, Source: r.Exchange, Symbols: r.Symbols, Interval: r.Interval, From: now.Add(-step), To: now, Capital: r.Capital, FeeBPS: r.FeeBPS, SlippageBPS: r.SlippageBPS, MaxLLMCalls: r.MaxLLMCalls}
 	if e = core.ValidateBacktest(check); e != nil {
 		return Session{}, e
 	}
 	v, e := m.App.Store.Version(r.StrategyID, r.Version)
 	if e != nil {
+		return Session{}, e
+	}
+	if v.Strategy.RequiresPlannedExecution() {
+		return Session{}, fmt.Errorf("setups and planned risk are supported by historical backtests only")
+	}
+	if _, e := v.Strategy.WarmupBars(r.Interval); e != nil {
 		return Session{}, e
 	}
 	if v.Strategy.LLM != nil && (!r.AllowLLM || r.MaxLLMCalls < 1) {
@@ -206,7 +223,7 @@ func (m *Sessions) Start(ctx context.Context, r SessionRequest) (Session, error)
 			}
 		}
 	}
-	s := Session{ID: ID(), Status: "running", CreatedAt: time.Now().UTC(), Request: r, Strategy: v, Positions: map[string]core.Position{}, Balances: map[string]float64{}, LastCandle: map[string]time.Time{}, Previous: map[string]map[string]float64{}, Events: []SessionEvent{}}
+	s := Session{ID: ID(), Status: "running", CreatedAt: m.nowUTC(), Request: r, Strategy: v, Positions: map[string]core.Position{}, Balances: map[string]float64{}, LastCandle: map[string]time.Time{}, Previous: map[string]map[string]float64{}, Events: []SessionEvent{}}
 	for _, sym := range r.Symbols {
 		s.Balances[sym] = r.Capital / float64(len(r.Symbols))
 	}
@@ -233,8 +250,6 @@ func (m *Sessions) launch(s Session) {
 		defer close(w.done)
 		defer cancel()
 		defer func() { m.mu.Lock(); delete(m.workers, s.ID); m.mu.Unlock() }()
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
 		for {
 			w.mu.Lock()
 			e := m.tick(ctx, &s, w.enrich)
@@ -255,13 +270,16 @@ func (m *Sessions) launch(s Session) {
 			if e != nil || ctx.Err() != nil {
 				return
 			}
+			now := m.nowUTC()
+			timer := time.NewTimer(nextSessionPoll(now).Sub(now))
 			select {
 			case <-ctx.Done():
+				timer.Stop()
 				s.Status = "paused"
 				s.Error = "session paused"
 				_ = m.App.Store.Put("sessions", s.ID, s)
 				return
-			case <-ticker.C:
+			case <-timer.C:
 			}
 		}
 	}()
@@ -273,6 +291,15 @@ func (m *Sessions) tick(ctx context.Context, s *Session, enrich core.Enricher) e
 	step, _ := core.Interval(s.Request.Interval)
 	broker := m.Brokers[s.Request.Exchange]
 	strategy := s.Strategy.Strategy
+	if strategy.RequiresPlannedExecution() {
+		return fmt.Errorf("setups and planned risk are supported by historical backtests only")
+	}
+	warmup, e := strategy.WarmupBars(s.Request.Interval)
+	if e != nil {
+		return e
+	}
+	// Freeze one information boundary for the whole tick, before any I/O.
+	end := m.nowUTC().Truncate(step)
 	for _, symbol := range s.Request.Symbols {
 		if e := ctx.Err(); e != nil {
 			return e
@@ -290,38 +317,30 @@ func (m *Sessions) tick(ctx context.Context, s *Session, enrich core.Enricher) e
 		if position.Side != "" {
 			bar := core.Candle{Open: quote, High: quote, Low: quote, Close: quote}
 			if _, reason := core.RiskExit(position, bar, strategy.Risk); reason != "" {
-				if e = m.fill(ctx, s, symbol, "exit_"+position.Side, quote, reason, time.Now().UTC()); e != nil {
+				if e = m.fill(ctx, s, symbol, "exit_"+position.Side, quote, reason, m.nowUTC()); e != nil {
 					return e
 				}
 				continue
 			}
 		}
-		end := time.Now().UTC().Truncate(step)
 		last := end.Add(-step)
 		if !last.After(s.LastCandle[symbol]) {
 			continue
 		}
-		bars, e := m.App.Sources[s.Request.Exchange].Candles(ctx, symbol, s.Request.Interval, end.Add(-time.Duration(strategy.Warmup()+2)*step), end)
+		bars, e := m.closedSessionHistory(ctx, s, symbol, end, warmup)
 		if e != nil {
 			return e
 		}
-		if len(bars) < strategy.Warmup()+2 || !bars[len(bars)-1].Time.Equal(last) {
-			return fmt.Errorf("%s: incomplete warmup or stale market data", symbol)
-		}
-		for i := 1; i < len(bars); i++ {
-			if !bars[i].Time.Equal(bars[i-1].Time.Add(step)) {
-				return fmt.Errorf("%s: market data gap", symbol)
-			}
-		}
-		if _, e = m.App.Store.Merge(store.Dataset{Source: s.Request.Exchange, Symbol: symbol, Interval: s.Request.Interval, Candles: bars}); e != nil {
+		features, e := core.BuildFeatures(bars, strategy, s.Request.Interval)
+		if e != nil {
 			return e
 		}
-		features := core.Features(bars, strategy.Indicators)
 		current := features[len(features)-1]
 		previous := s.Previous[symbol]
 		if previous == nil || !s.LastCandle[symbol].Equal(last.Add(-step)) {
 			previous = features[len(features)-2]
 		}
+		strategy.ApplyPreviousLLMHistory(current, previous)
 		decision, e := core.ResolveDecision(ctx, strategy, bars, current, previous, symbol, position.Side, enrich)
 		if e != nil {
 			return e
@@ -329,9 +348,9 @@ func (m *Sessions) tick(ctx context.Context, s *Session, enrich core.Enricher) e
 		decision.Time = end
 		s.LastCandle[symbol] = last
 		s.Previous[symbol] = current
-		if time.Since(end) > 30*time.Second {
+		if !m.withinSessionFrame(end) {
 			decision.Action = "hold"
-			decision.Reason = "signal older than 30 seconds; waiting for the next candle"
+			decision.Reason = missedSessionFrameReason
 		}
 		s.Events = append(s.Events, SessionEvent{Symbol: symbol, Time: end, Decision: &decision})
 		trimEvents(s)
@@ -345,7 +364,14 @@ func (m *Sessions) tick(ctx context.Context, s *Session, enrich core.Enricher) e
 				return e
 			}
 			if e = m.fill(ctx, s, symbol, decision.Action, quote, "strategy", end); e != nil {
-				return e
+				if !errors.Is(e, errMissedSessionFrame) {
+					return e
+				}
+				decision.Action = "hold"
+				decision.Reason = missedSessionFrameReason
+				if e = m.App.Store.Put("sessions", s.ID, s); e != nil {
+					return e
+				}
 			}
 		}
 	}
@@ -367,6 +393,9 @@ func (m *Sessions) matchPosition(ctx context.Context, s *Session, symbol string)
 	return nil
 }
 func (m *Sessions) fill(ctx context.Context, s *Session, symbol, action string, quote float64, reason string, signalTime time.Time) error {
+	if reason == "strategy" && !m.withinSessionFrame(signalTime) {
+		return errMissedSessionFrame
+	}
 	p := s.Positions[symbol]
 	entry := strings.HasPrefix(action, "enter_")
 	buy := action == "enter_long" || action == "exit_short"
@@ -387,7 +416,7 @@ func (m *Sessions) fill(ctx context.Context, s *Session, symbol, action string, 
 	if buy {
 		side = "BUY"
 	}
-	intent := Intent{Order: execution.Order{Symbol: symbol, Side: side, Quantity: strconv.FormatFloat(qty, 'f', 12, 64), ReduceOnly: !entry, ClientID: "arc-" + store.Hash([]string{s.ID, symbol, action, signalTime.Format(time.RFC3339Nano)})[:28]}, Action: action, Reason: reason, At: time.Now().UTC()}
+	intent := Intent{Order: execution.Order{Symbol: symbol, Side: side, Quantity: strconv.FormatFloat(qty, 'f', 12, 64), ReduceOnly: !entry, ClientID: "arc-" + store.Hash([]string{s.ID, symbol, action, signalTime.Format(time.RFC3339Nano)})[:28]}, Action: action, Reason: reason, At: m.nowUTC()}
 	if s.Request.Mode == "paper" {
 		price := core.Slipped(quote, s.Request.SlippageBPS, buy)
 		if entry {
@@ -410,10 +439,28 @@ func (m *Sessions) fill(ctx context.Context, s *Session, symbol, action string, 
 	if e != nil {
 		return e
 	}
+	if reason == "strategy" && !m.withinSessionFrame(signalTime) {
+		return errMissedSessionFrame
+	}
 	intent.Order = order
+	intent.At = m.nowUTC()
 	s.Pending = &intent
 	if e = m.App.Store.Put("sessions", s.ID, s); e != nil {
 		return e
+	}
+	if reason == "strategy" {
+		if !m.withinSessionFrame(signalTime) {
+			s.Pending = nil
+			if e = m.App.Store.Put("sessions", s.ID, s); e != nil {
+				return e
+			}
+			return errMissedSessionFrame
+		}
+		// If submission times out, retain the durable intent for reconciliation:
+		// cancellation cannot prove that the exchange did not receive the order.
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, signalTime.Add(sessionFrameWindow).Sub(m.nowUTC()))
+		defer cancel()
 	}
 	receipt, e := broker.Submit(ctx, order)
 	if e != nil {
@@ -530,7 +577,7 @@ func (m *Sessions) Command(ctx context.Context, id, action string) (Session, err
 				if e != nil {
 					return s, e
 				}
-				if e = m.fill(ctx, &s, sym, "exit_"+p.Side, q, "manual_close", time.Now().UTC()); e != nil {
+				if e = m.fill(ctx, &s, sym, "exit_"+p.Side, q, "manual_close", m.nowUTC()); e != nil {
 					s.Error = e.Error()
 					_ = m.App.Store.Put("sessions", s.ID, s)
 					return s, e

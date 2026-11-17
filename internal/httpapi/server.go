@@ -78,7 +78,7 @@ func (s *Server) Handler() http.Handler {
 			failure(w, 400, e)
 			return
 		}
-		respond(w, 200, map[string]any{"valid": true, "fields": v.Fields(), "warmup": v.Warmup()})
+		respond(w, 200, map[string]any{"valid": true, "fields": v.Fields(), "warmup": v.Warmup(), "warmup_by_interval": v.WarmupByInterval()})
 	})
 	m.HandleFunc("GET /api/datasets", func(w http.ResponseWriter, r *http.Request) { v, e := s.App.Store.Datasets(); result(w, v, e) })
 	m.HandleFunc("GET /api/symbols", func(w http.ResponseWriter, r *http.Request) {
@@ -231,7 +231,7 @@ func (s *Server) Handler() http.Handler {
 	return s.guard(m)
 }
 func (s *Server) Catalog() map[string]any {
-	return map[string]any{"name": "Arcam", "version": "0.1.0", "live_enabled": s.App.Sessions.LiveEnabled, "max_live_order_notional": s.App.Sessions.MaxLiveNotional, "sources": []string{"binance_spot", "binance_futures"}, "execution_exchanges": []string{"binance_futures"}, "intervals": []string{"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d"}, "indicators": []string{"ema", "sma", "rsi", "atr", "aroon", "ichimoku", "macd", "bollinger"}, "operators": []string{"gt", "gte", "lt", "lte", "eq", "crosses_above", "crosses_below"}, "rule_types": []string{"comparison", "all", "any", "not", "position", "signal"}, "position_states": []string{"none", "long", "short"}, "signal_conditions": []string{"enter_long", "enter_short"}, "history_auto_download": true, "position_example": core.PositionStrategy(), "example": core.DemoStrategy(), "llm_example": core.D1Strategy().LLM, "d1_example": core.D1Strategy(), "llm_protocols": []string{"chat", "systemone"}}
+	return map[string]any{"name": "Arcam", "version": "0.1.0", "live_enabled": s.App.Sessions.LiveEnabled, "max_live_order_notional": s.App.Sessions.MaxLiveNotional, "sources": []string{"binance_spot", "binance_futures"}, "execution_exchanges": []string{"binance_futures"}, "intervals": []string{"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d"}, "indicators": []string{"ohlc", "adr", "pivot", "ema", "sma", "rsi", "atr", "aroon", "ichimoku", "macd", "bollinger"}, "operators": []string{"gt", "gte", "lt", "lte", "eq", "crosses_above", "crosses_below"}, "rule_types": []string{"setup", "comparison", "all", "any", "not", "position", "signal"}, "position_states": []string{"none", "long", "short"}, "signal_conditions": []string{"enter_long", "enter_short"}, "history_auto_download": true, "dsl": core.DSLCatalog(), "position_example": core.PositionStrategy(), "example": core.DemoStrategy(), "llm_example": core.D1Strategy().LLM, "d1_example": core.D1Strategy(), "llm_protocols": []string{"chat", "systemone"}}
 }
 func (s *Server) guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

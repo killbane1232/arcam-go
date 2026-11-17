@@ -33,7 +33,11 @@ func (s *Service) ResumeRun(id string) (core.Run, error) {
 	}
 	r := run.Request
 	step, _ := core.Interval(r.Interval)
-	from := r.From.Add(-time.Duration(run.Strategy.Strategy.Warmup()) * step)
+	warmup, e := run.Strategy.Strategy.WarmupBars(r.Interval)
+	if e != nil {
+		return run, e
+	}
+	from := r.From.Add(-time.Duration(warmup) * step)
 	if run.InputData == nil {
 		return run, fmt.Errorf("saved input data is missing; cannot resume this run")
 	}
@@ -161,7 +165,12 @@ func (s *Service) executeRun(ctx context.Context, run core.Run, needsHistory boo
 	}
 	r, v, input := run.Request, run.Strategy, run.InputData
 	step, _ := core.Interval(r.Interval)
-	from := r.From.Add(-time.Duration(v.Strategy.Warmup()) * step)
+	warmup, e := v.Strategy.WarmupBars(r.Interval)
+	if e != nil {
+		fail(e)
+		return
+	}
+	from := r.From.Add(-time.Duration(warmup) * step)
 	if needsHistory {
 		run.Status = "preparing"
 		run.Progress = "Downloading missing history"

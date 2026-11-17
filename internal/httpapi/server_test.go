@@ -356,3 +356,40 @@ func TestResumeHTTPKeepsRunAndRejectsConfigurationChanges(t *testing.T) {
 	}
 	t.Fatal("resume did not finish")
 }
+
+func TestExtendedDSLJSONAndCatalog(t *testing.T) {
+	s := testServer(t)
+	candidate := core.LevelsStrategy()
+	body, e := json.Marshal(candidate)
+	if e != nil {
+		t.Fatal(e)
+	}
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "http://localhost:8080/api/strategies/validate", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	s.Handler().ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	var validation struct {
+		Warmup map[string]int `json:"warmup_by_interval"`
+	}
+	if e = json.Unmarshal(w.Body.Bytes(), &validation); e != nil || validation.Warmup["15m"] < 15*96 {
+		t.Fatal("missing context warmup", e)
+	}
+	if s.Catalog()["dsl"] == nil {
+		t.Fatal("missing DSL catalog")
+	}
+	v, e := s.App.Store.SaveVersion("levels-test", candidate)
+	if e != nil {
+		t.Fatal(e)
+	}
+	saved, e := s.App.Store.Version(v.ID, v.Version)
+	if e != nil {
+		t.Fatal(e)
+	}
+	a, _ := json.Marshal(saved.Strategy)
+	if string(a) != string(body) {
+		t.Fatal("DSL changed on persistence")
+	}
+}

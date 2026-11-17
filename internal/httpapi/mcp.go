@@ -45,13 +45,13 @@ func (s *Server) MCPServer() *mcp.Server {
 		v, e := s.App.Store.Strategies()
 		return map[string]any{"versions": v}, e
 	})
-	add(server, "validate_strategy", "Validate a candidate without saving it. Returns available fields and warmup bars.", func(ctx context.Context, in validateInput) (any, error) {
+	add(server, "validate_strategy", "Validate a candidate without saving it. Returns available fields and warmup_by_interval in execution bars; warmup is the legacy indicator-bar estimate.", func(ctx context.Context, in validateInput) (any, error) {
 		var v core.Strategy
 		if e := Decode(strings.NewReader(in.StrategyJSON), &v); e != nil {
 			return nil, e
 		}
 		e := core.ValidateStrategy(v)
-		return map[string]any{"valid": e == nil, "fields": v.Fields(), "warmup": v.Warmup()}, e
+		return map[string]any{"valid": e == nil, "fields": v.Fields(), "warmup": v.Warmup(), "warmup_by_interval": v.WarmupByInterval()}, e
 	})
 	add(server, "save_strategy", "Create an immutable version; put the hypothesis in description.", func(ctx context.Context, in strategyInput) (any, error) {
 		var v core.Strategy
@@ -86,7 +86,7 @@ func (s *Server) MCPServer() *mcp.Server {
 		v, e := s.App.Run(in.ID)
 		summaries := []map[string]any{}
 		for _, p := range v.Pairs {
-			summaries = append(summaries, map[string]any{"symbol": p.Symbol, "metrics": p.Metrics, "data_hash": p.DataHash, "decisions": len(p.Decisions), "complete": p.Complete, "open_position": p.OpenPosition, "pending_action": p.PendingAction, "unrealized_pnl": p.UnrealizedPnL})
+			summaries = append(summaries, map[string]any{"symbol": p.Symbol, "metrics": p.Metrics, "data_hash": p.DataHash, "decisions": len(p.Decisions), "complete": p.Complete, "open_position": p.OpenPosition, "pending_action": p.PendingAction, "pending_plan": p.PendingPlan, "setups": p.Setups, "entry_day": p.EntryDay, "entries_today": p.EntriesToday, "unrealized_pnl": p.UnrealizedPnL})
 		}
 		v.Pairs = nil
 		v.InputData = nil

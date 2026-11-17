@@ -1,0 +1,155 @@
+{
+  "name": "Daily level breakout and retest",
+  "description": "DSL example, not a validated trading hypothesis. Closed daily context; one retest attempt per previous-day level.",
+  "indicators": [
+    {
+      "timeframe": "1d",
+      "id": "adr5",
+      "type": "adr",
+      "period": 5
+    },
+    {
+      "timeframe": "1d",
+      "id": "atr14",
+      "type": "atr",
+      "period": 14
+    }
+  ],
+  "setups": [
+    {
+      "id": "breakout",
+      "when": {
+        "left": {
+          "field": "close"
+        },
+        "op": "crosses_above",
+        "right": {
+          "field": "previous_day.high"
+        }
+      },
+      "key": {
+        "field": "previous_day.time"
+      },
+      "capture": {
+        "level": {
+          "field": "previous_day.high"
+        },
+        "stop": {
+          "op": "sub",
+          "args": [
+            {
+              "field": "previous_day.high"
+            },
+            {
+              "op": "mul",
+              "args": [
+                {
+                  "field": "atr14.value"
+                },
+                {
+                  "value": 0.2
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expires_after": 4,
+      "cancel": {
+        "left": {
+          "field": "close"
+        },
+        "op": "lt",
+        "right": {
+          "field": "setup.breakout.stop"
+        }
+      }
+    }
+  ],
+  "rules": {
+    "enter_long": {
+      "all": [
+        {
+          "setup": "breakout"
+        },
+        {
+          "left": {
+            "field": "setup.breakout.age"
+          },
+          "op": "gte",
+          "right": {
+            "value": 1
+          }
+        },
+        {
+          "left": {
+            "field": "low"
+          },
+          "op": "lte",
+          "right": {
+            "field": "setup.breakout.level"
+          }
+        },
+        {
+          "left": {
+            "field": "close"
+          },
+          "op": "gt",
+          "right": {
+            "field": "setup.breakout.level"
+          }
+        },
+        {
+          "left": {
+            "op": "div",
+            "args": [
+              {
+                "field": "day.range"
+              },
+              {
+                "field": "adr5.value"
+              }
+            ]
+          },
+          "op": "lt",
+          "right": {
+            "value": 1.5
+          }
+        }
+      ]
+    },
+    "exit_long": {
+      "left": {
+        "field": "close"
+      },
+      "op": "lt",
+      "right": {
+        "field": "setup.breakout.level"
+      }
+    }
+  },
+  "risk": {
+    "position_fraction": 1,
+    "stop_loss": 0,
+    "take_profit": 0,
+    "long": {
+      "stop_price": {
+        "field": "setup.breakout.stop"
+      },
+      "target_price": {
+        "op": "add",
+        "args": [
+          {
+            "field": "setup.breakout.level"
+          },
+          {
+            "field": "atr14.value"
+          }
+        ]
+      }
+    },
+    "risk_fraction": 0.005,
+    "max_stop_fraction": 0.1,
+    "max_entries_per_day": 2
+  }
+}

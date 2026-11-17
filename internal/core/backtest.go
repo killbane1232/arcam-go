@@ -9,11 +9,15 @@ import (
 
 type Enricher func(context.Context, []Candle, map[string]float64, string, string) (*LLMAudit, error)
 type Position struct {
-	Side     string    `json:"side"`
-	Entry    float64   `json:"entry"`
-	Quantity float64   `json:"quantity"`
-	EntryFee float64   `json:"entry_fee"`
-	Time     time.Time `json:"time"`
+	StopPrice   float64   `json:"stop_price,omitempty"`
+	TargetPrice float64   `json:"target_price,omitempty"`
+	InitialRisk float64   `json:"initial_risk,omitempty"`
+	EventID     string    `json:"event_id,omitempty"`
+	Side        string    `json:"side"`
+	Entry       float64   `json:"entry"`
+	Quantity    float64   `json:"quantity"`
+	EntryFee    float64   `json:"entry_fee"`
+	Time        time.Time `json:"time"`
 }
 
 func (p Position) PnL(price float64) float64 {
@@ -37,19 +41,31 @@ func RiskExit(p Position, c Candle, r Risk) (float64, string) {
 	if p.Side == "long" {
 		stop = p.Entry * (1 - r.StopLoss)
 		take = p.Entry * (1 + r.TakeProfit)
-		if r.StopLoss > 0 && c.Low <= stop {
+		if p.StopPrice > 0 {
+			stop = p.StopPrice
+		}
+		if p.TargetPrice > 0 {
+			take = p.TargetPrice
+		}
+		if (r.StopLoss > 0 || p.StopPrice > 0) && c.Low <= stop {
 			return math.Min(c.Open, stop), "stop_loss"
 		}
-		if r.TakeProfit > 0 && c.High >= take {
+		if (r.TakeProfit > 0 || p.TargetPrice > 0) && c.High >= take {
 			return math.Max(c.Open, take), "take_profit"
 		}
 	} else {
 		stop = p.Entry * (1 + r.StopLoss)
 		take = p.Entry * (1 - r.TakeProfit)
-		if r.StopLoss > 0 && c.High >= stop {
+		if p.StopPrice > 0 {
+			stop = p.StopPrice
+		}
+		if p.TargetPrice > 0 {
+			take = p.TargetPrice
+		}
+		if (r.StopLoss > 0 || p.StopPrice > 0) && c.High >= stop {
 			return math.Max(c.Open, stop), "stop_loss"
 		}
-		if r.TakeProfit > 0 && c.Low <= take {
+		if (r.TakeProfit > 0 || p.TargetPrice > 0) && c.Low <= take {
 			return math.Min(c.Open, take), "take_profit"
 		}
 	}
@@ -100,13 +116,20 @@ func ResumeBacktest(ctx context.Context, s Strategy, r BacktestRequest, symbol s
 	if len(c) < 2 {
 		return result, fmt.Errorf("not enough candles")
 	}
-	f := Features(c, s.Indicators)
+	f, err := BuildFeatures(c, s, r.Interval)
+	if err != nil {
+		return result, err
+	}
+	history := s.historyOperands()
 	balance := r.Capital / float64(len(r.Symbols))
 	initial := balance
 	peak, wins := initial, 0
 	fee := r.FeeBPS / 10000
 	var pos Position
 	pending := ""
+	var pendingPlan *EntryPlan
+	states := saved.Setups
+	entryDay, entriesToday := saved.EntryDay, saved.EntriesToday
 	var prev map[string]float64
 	resumeAt := r.From
 	if len(saved.Candles) > 0 {
@@ -118,6 +141,20 @@ func ResumeBacktest(ctx context.Context, s Strategy, r BacktestRequest, symbol s
 			pos = *saved.OpenPosition
 		}
 		pending = saved.PendingAction
+		pendingPlan = saved.PendingPlan
+		if len(s.Setups) > 0 && len(states) != len(s.Setups) {
+			return saved, fmt.Errorf("missing saved setup state")
+		}
+		if s.RequiresPlannedExecution() && (pending == "enter_long" || pending == "enter_short") && pendingPlan == nil {
+			return saved, fmt.Errorf("missing saved entry plan")
+		}
+		j := 0
+		for i, bar := range c {
+			if !bar.Time.Before(r.From) && j < len(saved.Decisions) {
+				f[i] = saved.Decisions[j].Features
+				j++
+			}
+		}
 		prev = saved.Decisions[len(saved.Decisions)-1].Features
 		resumeAt = r.From.Add(time.Duration(len(saved.Candles)) * d)
 		for _, e := range saved.Equity {
@@ -147,7 +184,11 @@ func ResumeBacktest(ctx context.Context, s Strategy, r BacktestRequest, symbol s
 		if pnl > 0 {
 			wins++
 		}
-		result.Trades = append(result.Trades, Trade{Side: pos.Side, EntryTime: pos.Time, ExitTime: at, Entry: pos.Entry, Exit: price, Quantity: pos.Quantity, Fees: pos.EntryFee + exitFee, PnL: pnl, Reason: reason})
+		pnlR := 0.0
+		if pos.InitialRisk > 0 {
+			pnlR = pnl / pos.InitialRisk
+		}
+		result.Trades = append(result.Trades, Trade{StopPrice: pos.StopPrice, TargetPrice: pos.TargetPrice, InitialRisk: pos.InitialRisk, PnLR: pnlR, EventID: pos.EventID, Side: pos.Side, EntryTime: pos.Time, ExitTime: at, Entry: pos.Entry, Exit: price, Quantity: pos.Quantity, Fees: pos.EntryFee + exitFee, PnL: pnl, Reason: reason})
 		result.Fills = append(result.Fills, Fill{Time: at, Action: "exit_" + pos.Side, Price: price, Quantity: pos.Quantity, Reason: reason})
 		pos = Position{}
 	}
@@ -172,34 +213,70 @@ func ResumeBacktest(ctx context.Context, s Strategy, r BacktestRequest, symbol s
 				closePosition(bar.Open, bar.Time, "rule")
 			}
 		}
-		if (pending == "enter_long" || pending == "enter_short") && pos.Side == "" && balance > 0 {
-			side := "long"
-			if pending == "enter_short" {
-				side = "short"
+		day := bar.Time.UTC().Format("2006-01-02")
+		if day != entryDay {
+			entryDay = day
+			entriesToday = 0
+		}
+		var execution *ExecutionAudit
+		if (pending == "enter_long" || pending == "enter_short") && pos.Side == "" {
+			if pendingPlan == nil {
+				// Legacy checkpoints did not store plans.
+				side := "long"
+				if pending == "enter_short" {
+					side = "short"
+				}
+				pendingPlan = &EntryPlan{Side: side}
 			}
-			price := Slipped(bar.Open, r.SlippageBPS, side == "long")
-			qty := balance * s.Risk.PositionFraction / (price * (1 + fee))
-			entryFee := qty * price * fee
-			balance -= entryFee
-			result.Metrics.Fees += entryFee
-			pos = Position{Side: side, Entry: price, Quantity: qty, EntryFee: entryFee, Time: bar.Time}
-			result.Fills = append(result.Fills, Fill{Time: bar.Time, Action: pending, Price: price, Quantity: qty, Reason: "previous closed candle signal"})
+			if s.Risk.MaxEntriesPerDay > 0 && entriesToday >= s.Risk.MaxEntriesPerDay {
+				execution = &ExecutionAudit{Action: pending, Status: "skipped", Reason: "daily entry limit", Plan: pendingPlan}
+			} else {
+				pos, execution = executeEntry(s, r, pendingPlan, balance, bar)
+				if pos.Side != "" {
+					balance -= pos.EntryFee
+					result.Metrics.Fees += pos.EntryFee
+					entriesToday++
+					result.Fills = append(result.Fills, Fill{Time: bar.Time, Action: pending, Price: pos.Entry, Quantity: pos.Quantity, Reason: "previous closed candle signal", StopPrice: pos.StopPrice, TargetPrice: pos.TargetPrice, InitialRisk: pos.InitialRisk, EventID: pos.EventID})
+				}
+			}
 		}
 		pending = ""
+		pendingPlan = nil
 		if price, reason := RiskExit(pos, bar, s.Risk); reason != "" {
 			closePosition(price, bar.Time.Add(d), reason)
 		}
+		addHistory(history, f, i)
+		states = advanceSetups(s, states, f[i], prev, bar.Time.Add(d), d, pos.Side)
 		decision, e := ResolveDecision(ctx, s, c[:i+1], f[i], prev, symbol, pos.Side, enrich)
 		if e != nil {
 			return committed, e
 		}
 		decision.Time = bar.Time.Add(d)
+		decision.Execution = execution
+		decision.EntryDay, decision.EntriesToday = entryDay, entriesToday
 		if balance <= 0 && pos.Side == "" {
 			decision.Action = "hold"
 			decision.Reason = "capital exhausted"
 		}
 		last := bar.Time.Add(d).Equal(r.To)
 		if !last {
+			if decision.Action == "enter_long" || decision.Action == "enter_short" {
+				// Limits apply to the actual UTC fill day (the next open).
+				if s.Risk.MaxEntriesPerDay > 0 && decision.Time.UTC().Format("2006-01-02") == entryDay && entriesToday >= s.Risk.MaxEntriesPerDay {
+					decision.Action = "hold"
+					decision.Reason = "daily entry limit"
+				} else {
+					plan, reason := planEntry(s, decision, balance)
+					if reason != "" {
+						decision.Action = "hold"
+						decision.Reason = reason
+					} else {
+						plan.EventID = consumeSetups(states, decision.Rules[decision.Action])
+						pendingPlan = plan
+						decision.Plan = plan
+					}
+				}
+			}
 			pending = decision.Action
 		} else {
 			if decision.Action != "hold" {
@@ -209,6 +286,11 @@ func ResumeBacktest(ctx context.Context, s Strategy, r BacktestRequest, symbol s
 				closePosition(bar.Close, bar.Time.Add(d), "end_of_range")
 			}
 		}
+		decision.Setups = states
+		result.Setups = states
+		result.PendingPlan = pendingPlan
+		result.EntryDay = entryDay
+		result.EntriesToday = entriesToday
 		result.Candles = append(result.Candles, bar)
 		result.Decisions = append(result.Decisions, decision)
 		equity := balance + pos.PnL(bar.Close)

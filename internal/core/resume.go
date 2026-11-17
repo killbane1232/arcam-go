@@ -3,6 +3,8 @@ package core
 import (
 	"fmt"
 	"math"
+	"reflect"
+	"strings"
 	"time"
 )
 
@@ -45,6 +47,27 @@ func ValidateResume(r BacktestRequest, symbol string, input []Candle, p PairResu
 	if p.PendingAction != p.Decisions[n-1].Action {
 		return fmt.Errorf("%s: missing saved pending action", symbol)
 	}
+	if !reflect.DeepEqual(p.Setups, p.Decisions[n-1].Setups) || !reflect.DeepEqual(p.PendingPlan, p.Decisions[n-1].Plan) || p.EntryDay != p.Decisions[n-1].EntryDay || p.EntriesToday != p.Decisions[n-1].EntriesToday {
+		return fmt.Errorf("%s: inconsistent saved setup/plan/daily state", symbol)
+	}
+	if p.EntryDay != "" {
+		day := p.Candles[n-1].Time.UTC().Format("2006-01-02")
+		entries := 0
+		for _, f := range p.Fills {
+			if strings.HasPrefix(f.Action, "enter_") && f.Time.UTC().Format("2006-01-02") == day {
+				entries++
+			}
+		}
+		if p.EntryDay != day || p.EntriesToday != entries {
+			return fmt.Errorf("%s: inconsistent saved daily entry count", symbol)
+		}
+	}
+	if p.PendingPlan != nil {
+		plan := p.PendingPlan
+		if p.PendingAction != "enter_"+plan.Side || !plan.SignalTime.Equal(p.Decisions[n-1].Time) || !Finite(plan.ReferencePrice) || plan.ReferencePrice <= 0 || !Finite(plan.RiskBudget) || plan.RiskBudget < 0 {
+			return fmt.Errorf("%s: invalid saved entry plan", symbol)
+		}
+	}
 	var pos Position
 	balance := p.Metrics.Initial
 	fee := r.FeeBPS / 10000
@@ -61,7 +84,7 @@ func ValidateResume(r BacktestRequest, symbol string, input []Candle, p PairResu
 			}
 			entryFee := f.Price * f.Quantity * fee
 			balance -= entryFee
-			pos = Position{Side: side, Entry: f.Price, Quantity: f.Quantity, EntryFee: entryFee, Time: f.Time}
+			pos = Position{StopPrice: f.StopPrice, TargetPrice: f.TargetPrice, InitialRisk: f.InitialRisk, EventID: f.EventID, Side: side, Entry: f.Price, Quantity: f.Quantity, EntryFee: entryFee, Time: f.Time}
 		case "exit_long", "exit_short":
 			if pos.Side == "" || f.Action != "exit_"+pos.Side || !closeEnough(f.Quantity, pos.Quantity) {
 				return fmt.Errorf("%s: inconsistent saved exit", symbol)

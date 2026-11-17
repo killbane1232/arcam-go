@@ -49,8 +49,12 @@ func ValidateCandles(c []Candle, interval string) error {
 }
 func Outputs(i Indicator) []string {
 	switch i.Type {
-	case "ema", "sma", "rsi", "atr":
+	case "ema", "sma", "rsi", "atr", "adr":
 		return []string{"value"}
+	case "ohlc":
+		return []string{"open", "high", "low", "close", "range", "volume"}
+	case "pivot":
+		return []string{"high", "low", "high_time", "low_time", "high_confirmation_bar", "low_confirmation_bar"}
 	case "aroon":
 		return []string{"up", "down", "oscillator"}
 	case "ichimoku":
@@ -65,8 +69,21 @@ func Outputs(i Indicator) []string {
 func (s Strategy) Fields() map[string]bool {
 	f := map[string]bool{"open": true, "high": true, "low": true, "close": true, "volume": true}
 	for _, i := range s.Indicators {
-		for _, o := range Outputs(i) {
+		for _, o := range append(Outputs(i), "available_at", "bar_time") {
 			f[i.ID+"."+o] = true
+		}
+	}
+	for _, key := range []string{"open", "high", "low", "range", "time", "available_at"} {
+		f["day."+key] = true
+		f["previous_day."+key] = true
+	}
+	f["previous_day.close"] = true
+	for _, setup := range s.Setups {
+		for _, key := range []string{"active", "age", "reference_time", "expires_at"} {
+			f["setup."+setup.ID+"."+key] = true
+		}
+		for key := range setup.Capture {
+			f["setup."+setup.ID+"."+key] = true
 		}
 	}
 	if s.LLM != nil {
@@ -79,13 +96,7 @@ func (s Strategy) Fields() map[string]bool {
 func (s Strategy) Warmup() int {
 	n := 2
 	for _, i := range s.Indicators {
-		v := i.Period + 1
-		switch i.Type {
-		case "ichimoku":
-			v = i.Period + i.Displacement + 1
-		case "macd":
-			v = i.Slow + i.Signal + 1
-		}
+		v := indicatorWarmup(i)
 		if v > n {
 			n = v
 		}
@@ -102,17 +113,25 @@ func ValidateStrategy(s Strategy) error {
 	if len(s.Indicators) > 32 {
 		return fmt.Errorf("maximum 32 indicators")
 	}
-	used := map[string]bool{"llm": true}
+	used := map[string]bool{"llm": true, "day": true, "previous_day": true, "setup": true}
 	validPeriod := func(v int) bool { return v >= 2 && v <= 1000 }
 	for _, i := range s.Indicators {
 		if !fieldID.MatchString(i.ID) || used[i.ID] {
 			return fmt.Errorf("invalid or duplicate indicator id %q", i.ID)
 		}
 		used[i.ID] = true
+		if i.Timeframe != "" {
+			if _, e := Interval(i.Timeframe); e != nil {
+				return e
+			}
+		}
+		if i.Type == "pivot" && (i.Left < 1 || i.Left > 1000 || i.Right < 1 || i.Right > 1000) {
+			return fmt.Errorf("pivot left/right must be 1..1000")
+		}
 		if len(Outputs(i)) == 0 {
 			return fmt.Errorf("unknown indicator %q", i.Type)
 		}
-		if i.Type != "macd" && !validPeriod(i.Period) {
+		if i.Type != "macd" && i.Type != "ohlc" && i.Type != "pivot" && !validPeriod(i.Period) {
 			return fmt.Errorf("%s: period must be 2..1000", i.ID)
 		}
 		if i.Type == "ichimoku" && (!validPeriod(i.Fast) || !validPeriod(i.Slow) || i.Fast >= i.Slow || i.Slow >= i.Period || i.Displacement < 1 || i.Displacement > 1000) {
@@ -151,6 +170,9 @@ func ValidateStrategy(s Strategy) error {
 	if s.Rules.EnterShort != nil && s.Rules.ExitShort == nil {
 		return fmt.Errorf("short entry requires an exit rule")
 	}
+	if err := validateExtensions(s); err != nil {
+		return err
+	}
 	count := 0
 	for name, r := range s.Rules.Map() {
 		if r != nil {
@@ -170,6 +192,9 @@ func validateRule(r Rule, fields map[string]bool, depth int, count *int, allowSi
 		return fmt.Errorf("rule tree exceeds depth/node limit")
 	}
 	modes := 0
+	if r.Setup != "" {
+		modes++
+	}
 	if r.Position != "" {
 		modes++
 	}
@@ -189,7 +214,13 @@ func validateRule(r Rule, fields map[string]bool, depth int, count *int, allowSi
 		modes++
 	}
 	if modes != 1 {
-		return fmt.Errorf("rule must contain exactly one of all/any/not/comparison/position/signal")
+		return fmt.Errorf("rule must contain exactly one of all/any/not/comparison/position/signal/setup")
+	}
+	if r.Setup != "" {
+		if !fields["setup."+r.Setup+".active"] {
+			return fmt.Errorf("unknown setup %q", r.Setup)
+		}
+		return nil
 	}
 	if r.Position != "" {
 		if r.Position != "none" && r.Position != "long" && r.Position != "short" {
@@ -232,15 +263,10 @@ func validateRule(r Rule, fields map[string]bool, depth int, count *int, allowSi
 	default:
 		return fmt.Errorf("unknown operator %q", r.Op)
 	}
+	operands := 0
 	for _, o := range []*Operand{r.Left, r.Right} {
-		if o == nil || ((o.Field == "") == (o.Value == nil)) {
-			return fmt.Errorf("operand must have exactly one field or value")
-		}
-		if o.Field != "" && !fields[o.Field] {
-			return fmt.Errorf("unknown feature %q", o.Field)
-		}
-		if o.Value != nil && !Finite(*o.Value) {
-			return fmt.Errorf("non-finite constant")
+		if err := validateOperand(o, fields, 0, &operands); err != nil {
+			return err
 		}
 	}
 	return nil

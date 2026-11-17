@@ -271,3 +271,54 @@ func TestConcurrentPreparationsReuseHistoryAndFreezeCachedValues(t *testing.T) {
 		t.Fatal("duplicate download", len(source.requests()))
 	}
 }
+
+func TestContextHistoryWarmupFrozenAndHashed(t *testing.T) {
+	s := testApp(t)
+	strategy := core.LevelsStrategy()
+	v, e := s.Store.SaveVersion("levels", strategy)
+	if e != nil {
+		t.Fatal(e)
+	}
+	from := time.Date(2025, 2, 1, 10, 0, 0, 0, time.UTC)
+	r := core.BacktestRequest{StrategyID: v.ID, Version: v.Version, Source: "exchange", Symbols: []string{"BTCUSDT"}, Interval: "1h", From: from, To: from.Add(8 * time.Hour), Capital: 1000}
+	source := &rangeSource{}
+	s.Sources[r.Source] = source
+	started, e := s.StartRun(r)
+	if e != nil {
+		t.Fatal(e)
+	}
+	out := waitRun(t, s, started.ID)
+	if out.Status != "completed" {
+		t.Fatal(out.Error)
+	}
+	warmup, e := strategy.WarmupBars("1h")
+	if e != nil {
+		t.Fatal(e)
+	}
+	input := out.InputData["BTCUSDT"]
+	if len(input) != warmup+8 || !input[0].Time.Equal(from.Add(-time.Duration(warmup)*time.Hour)) {
+		t.Fatal("context history was not loaded")
+	}
+	if out.Pairs[0].DataHash != store.Hash(input) {
+		t.Fatal("context source missing from hash")
+	}
+	f := out.Pairs[0].Decisions[0].Features
+	for _, key := range []string{"atr14.value", "adr5.value", "previous_day.high", "day.high"} {
+		if _, ok := f[key]; !ok {
+			t.Fatalf("missing warmed context %s", key)
+		}
+	}
+	r.Interval = "1d"
+	strategy.Indicators[0].Timeframe = "4h"
+	v, e = s.Store.SaveVersion("bad-context", strategy)
+	if e != nil {
+		t.Fatal(e)
+	}
+	r.StrategyID = v.ID
+	r.Version = v.Version
+	r.From = from.Truncate(24 * time.Hour)
+	r.To = r.From.Add(24 * time.Hour)
+	if _, e = s.StartRun(r); e == nil {
+		t.Fatal("incompatible timeframe accepted")
+	}
+}

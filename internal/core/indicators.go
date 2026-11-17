@@ -20,6 +20,52 @@ func Features(c []Candle, ind []Indicator) []map[string]float64 {
 	}
 	for _, i := range ind {
 		switch i.Type {
+		case "ohlc":
+			for j, b := range c {
+				for key, v := range map[string]float64{"open": b.Open, "high": b.High, "low": b.Low, "close": b.Close, "range": b.High - b.Low, "volume": b.Volume} {
+					out[j][i.ID+"."+key] = v
+				}
+			}
+		case "adr":
+			v := make([]float64, len(c))
+			for j, b := range c {
+				v[j] = b.High - b.Low
+			}
+			add(i.ID, "value", sma(v, i.Period))
+		case "pivot":
+			var high, low, highTime, lowTime, highConfirmed, lowConfirmed float64
+			for j := range c {
+				k := j - i.Right
+				if k >= i.Left {
+					isHigh, isLow := true, true
+					for q := k - i.Left; q <= j; q++ {
+						if q != k {
+							isHigh = isHigh && c[k].High > c[q].High
+							isLow = isLow && c[k].Low < c[q].Low
+						}
+					}
+					if isHigh {
+						high = c[k].High
+						highTime = float64(c[k].Time.Unix())
+						highConfirmed = float64(c[j].Time.Unix())
+					}
+					if isLow {
+						low = c[k].Low
+						lowTime = float64(c[k].Time.Unix())
+						lowConfirmed = float64(c[j].Time.Unix())
+					}
+				}
+				if high > 0 {
+					out[j][i.ID+".high"] = high
+					out[j][i.ID+".high_time"] = highTime
+					out[j][i.ID+".high_confirmation_bar"] = highConfirmed
+				}
+				if low > 0 {
+					out[j][i.ID+".low"] = low
+					out[j][i.ID+".low_time"] = lowTime
+					out[j][i.ID+".low_confirmation_bar"] = lowConfirmed
+				}
+			}
 		case "ema":
 			add(i.ID, "value", ema(close, i.Period))
 		case "sma":

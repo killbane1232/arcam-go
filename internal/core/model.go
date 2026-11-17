@@ -12,6 +12,9 @@ type Candle struct {
 }
 
 type Indicator struct {
+	Timeframe    string  `json:"timeframe,omitempty"`
+	Left         int     `json:"left,omitempty"`
+	Right        int     `json:"right,omitempty"`
 	ID           string  `json:"id"`
 	Type         string  `json:"type"`
 	Period       int     `json:"period,omitempty"`
@@ -23,10 +26,14 @@ type Indicator struct {
 }
 
 type Operand struct {
-	Field string   `json:"field,omitempty"`
-	Value *float64 `json:"value,omitempty"`
+	Field  string    `json:"field,omitempty"`
+	Value  *float64  `json:"value,omitempty"`
+	Offset int       `json:"offset,omitempty"`
+	Op     string    `json:"op,omitempty"`
+	Args   []Operand `json:"args,omitempty"`
 }
 type Rule struct {
+	Setup    string   `json:"setup,omitempty"`
 	Position string   `json:"position,omitempty"`
 	Signal   string   `json:"signal,omitempty"`
 	All      []Rule   `json:"all,omitempty"`
@@ -43,9 +50,27 @@ type Rules struct {
 	ExitShort  *Rule `json:"exit_short,omitempty"`
 }
 type Risk struct {
-	PositionFraction float64 `json:"position_fraction"`
-	StopLoss         float64 `json:"stop_loss"`
-	TakeProfit       float64 `json:"take_profit"`
+	PositionFraction float64     `json:"position_fraction"`
+	StopLoss         float64     `json:"stop_loss"`
+	TakeProfit       float64     `json:"take_profit"`
+	Long             *Protection `json:"long,omitempty"`
+	Short            *Protection `json:"short,omitempty"`
+	RiskFraction     float64     `json:"risk_fraction,omitempty"`
+	MaxNotional      float64     `json:"max_notional,omitempty"`
+	MaxStopFraction  float64     `json:"max_stop_fraction,omitempty"`
+	MaxEntriesPerDay int         `json:"max_entries_per_day,omitempty"`
+}
+type Protection struct {
+	StopPrice   *Operand `json:"stop_price"`
+	TargetPrice *Operand `json:"target_price,omitempty"`
+}
+type Setup struct {
+	ID           string             `json:"id"`
+	When         *Rule              `json:"when"`
+	Key          *Operand           `json:"key,omitempty"`
+	Capture      map[string]Operand `json:"capture"`
+	ExpiresAfter int                `json:"expires_after"`
+	Cancel       *Rule              `json:"cancel,omitempty"`
 }
 type LLMConfig struct {
 	Provider     string `json:"provider"`
@@ -58,6 +83,7 @@ type Strategy struct {
 	Name        string      `json:"name"`
 	Description string      `json:"description"`
 	Indicators  []Indicator `json:"indicators"`
+	Setups      []Setup     `json:"setups,omitempty"`
 	Rules       Rules       `json:"rules"`
 	Risk        Risk        `json:"risk"`
 	LLM         *LLMConfig  `json:"llm,omitempty"`
@@ -70,6 +96,7 @@ type Version struct {
 	Strategy  Strategy  `json:"strategy"`
 }
 type Trace struct {
+	Setup    string   `json:"setup,omitempty"`
 	Rule     string   `json:"rule"`
 	Ready    bool     `json:"ready"`
 	Result   bool     `json:"result"`
@@ -95,32 +122,46 @@ type LLMAudit struct {
 	ResponseMS  float64 `json:"response_ms,omitempty"`
 }
 type Decision struct {
-	LLMStatus string             `json:"llm_status,omitempty"`
-	Position  string             `json:"position,omitempty"`
-	Time      time.Time          `json:"time"`
-	Action    string             `json:"action"`
-	Reason    string             `json:"reason"`
-	Features  map[string]float64 `json:"features"`
-	Rules     map[string]Trace   `json:"rules"`
-	LLM       *LLMAudit          `json:"llm,omitempty"`
+	Setups       map[string]SetupState `json:"setups,omitempty"`
+	Plan         *EntryPlan            `json:"plan,omitempty"`
+	Execution    *ExecutionAudit       `json:"execution,omitempty"`
+	EntryDay     string                `json:"entry_day,omitempty"`
+	EntriesToday int                   `json:"entries_today,omitempty"`
+	LLMStatus    string                `json:"llm_status,omitempty"`
+	Position     string                `json:"position,omitempty"`
+	Time         time.Time             `json:"time"`
+	Action       string                `json:"action"`
+	Reason       string                `json:"reason"`
+	Features     map[string]float64    `json:"features"`
+	Rules        map[string]Trace      `json:"rules"`
+	LLM          *LLMAudit             `json:"llm,omitempty"`
 }
 type Trade struct {
-	Side      string    `json:"side"`
-	EntryTime time.Time `json:"entry_time"`
-	ExitTime  time.Time `json:"exit_time"`
-	Entry     float64   `json:"entry"`
-	Exit      float64   `json:"exit"`
-	Quantity  float64   `json:"quantity"`
-	Fees      float64   `json:"fees"`
-	PnL       float64   `json:"pnl"`
-	Reason    string    `json:"reason"`
+	StopPrice   float64   `json:"stop_price,omitempty"`
+	TargetPrice float64   `json:"target_price,omitempty"`
+	InitialRisk float64   `json:"initial_risk,omitempty"`
+	PnLR        float64   `json:"pnl_r,omitempty"`
+	EventID     string    `json:"event_id,omitempty"`
+	Side        string    `json:"side"`
+	EntryTime   time.Time `json:"entry_time"`
+	ExitTime    time.Time `json:"exit_time"`
+	Entry       float64   `json:"entry"`
+	Exit        float64   `json:"exit"`
+	Quantity    float64   `json:"quantity"`
+	Fees        float64   `json:"fees"`
+	PnL         float64   `json:"pnl"`
+	Reason      string    `json:"reason"`
 }
 type Fill struct {
-	Time     time.Time `json:"time"`
-	Action   string    `json:"action"`
-	Price    float64   `json:"price"`
-	Quantity float64   `json:"quantity"`
-	Reason   string    `json:"reason"`
+	StopPrice   float64   `json:"stop_price,omitempty"`
+	TargetPrice float64   `json:"target_price,omitempty"`
+	InitialRisk float64   `json:"initial_risk,omitempty"`
+	EventID     string    `json:"event_id,omitempty"`
+	Time        time.Time `json:"time"`
+	Action      string    `json:"action"`
+	Price       float64   `json:"price"`
+	Quantity    float64   `json:"quantity"`
+	Reason      string    `json:"reason"`
 }
 type EquityPoint struct {
 	Time  time.Time `json:"time"`
@@ -136,19 +177,23 @@ type Metrics struct {
 	Fees           float64 `json:"fees"`
 }
 type PairResult struct {
-	Complete      bool          `json:"complete"`
-	OpenPosition  *Position     `json:"open_position,omitempty"`
-	PendingAction string        `json:"pending_action,omitempty"`
-	Balance       float64       `json:"balance"`
-	UnrealizedPnL float64       `json:"unrealized_pnl"`
-	Symbol        string        `json:"symbol"`
-	DataHash      string        `json:"data_hash"`
-	Candles       []Candle      `json:"candles"`
-	Decisions     []Decision    `json:"decisions"`
-	Fills         []Fill        `json:"fills"`
-	Trades        []Trade       `json:"trades"`
-	Equity        []EquityPoint `json:"equity"`
-	Metrics       Metrics       `json:"metrics"`
+	Setups        map[string]SetupState `json:"setups,omitempty"`
+	PendingPlan   *EntryPlan            `json:"pending_plan,omitempty"`
+	EntryDay      string                `json:"entry_day,omitempty"`
+	EntriesToday  int                   `json:"entries_today,omitempty"`
+	Complete      bool                  `json:"complete"`
+	OpenPosition  *Position             `json:"open_position,omitempty"`
+	PendingAction string                `json:"pending_action,omitempty"`
+	Balance       float64               `json:"balance"`
+	UnrealizedPnL float64               `json:"unrealized_pnl"`
+	Symbol        string                `json:"symbol"`
+	DataHash      string                `json:"data_hash"`
+	Candles       []Candle              `json:"candles"`
+	Decisions     []Decision            `json:"decisions"`
+	Fills         []Fill                `json:"fills"`
+	Trades        []Trade               `json:"trades"`
+	Equity        []EquityPoint         `json:"equity"`
+	Metrics       Metrics               `json:"metrics"`
 }
 type BacktestRequest struct {
 	StrategyID  string    `json:"strategy_id"`
