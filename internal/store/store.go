@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -105,12 +106,20 @@ func atomic(path string, v any) error {
 	if e != nil {
 		return e
 	}
+	return atomicWrite(path, func(w io.Writer) error {
+		_, e := w.Write(b)
+		return e
+	})
+}
+
+// atomicWrite also supports streaming updates of large persisted records.
+func atomicWrite(path string, write func(io.Writer) error) error {
 	f, e := os.CreateTemp(filepath.Dir(path), ".tmp-*")
 	if e != nil {
 		return e
 	}
 	defer os.Remove(f.Name())
-	if _, e = f.Write(b); e != nil {
+	if e = write(f); e != nil {
 		f.Close()
 		return e
 	}

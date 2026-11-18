@@ -121,16 +121,8 @@ func NewSessions(s *Service) (*Sessions, error) {
 		return nil, e
 	}
 	for _, id := range ids {
-		var v Session
-		if e = s.Store.Get("sessions", id, &v); e != nil {
+		if _, e = s.Store.RecoverStatus("sessions", id, []string{"running"}, "paused", "service restarted; reconcile and resume explicitly"); e != nil {
 			return nil, e
-		}
-		if v.Status == "running" {
-			v.Status = "paused"
-			v.Error = "service restarted; reconcile and resume explicitly"
-			if e = s.Store.Put("sessions", id, v); e != nil {
-				return nil, e
-			}
 		}
 	}
 	s.Sessions = m

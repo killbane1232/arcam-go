@@ -393,3 +393,32 @@ func TestExtendedDSLJSONAndCatalog(t *testing.T) {
 		t.Fatal("DSL changed on persistence")
 	}
 }
+
+func TestSessionHistoryHTTP(t *testing.T) {
+	s := testServer(t)
+	session := app.Session{ID: "history-http", Status: "paused", Request: app.SessionRequest{Interval: "1h", Symbols: []string{"BTCUSDT"}}, Balances: map[string]float64{"BTCUSDT": 1000}}
+	if e := s.App.Store.Put("sessions", session.ID, session); e != nil {
+		t.Fatal(e)
+	}
+	handler := s.Handler()
+	for _, tc := range []struct {
+		id     string
+		status int
+	}{{session.ID, 200}, {"missing-history", 404}} {
+		req := httptest.NewRequest("GET", "http://localhost/api/sessions/"+tc.id+"/history", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != tc.status {
+			t.Fatalf("status %d: %s", w.Code, w.Body.String())
+		}
+		if tc.status == 200 {
+			var history app.SessionHistory
+			if e := json.Unmarshal(w.Body.Bytes(), &history); e != nil {
+				t.Fatal(e)
+			}
+			if history.Session.ID != session.ID || len(history.Pairs) != 1 || history.Pairs[0].Symbol != "BTCUSDT" {
+				t.Fatalf("wrong history: %+v", history)
+			}
+		}
+	}
+}

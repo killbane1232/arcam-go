@@ -221,6 +221,10 @@ func (s *Server) Handler() http.Handler {
 		e := s.App.Store.Get("sessions", r.PathValue("id"), &v)
 		result(w, v, e)
 	})
+	m.HandleFunc("GET /api/sessions/{id}/history", func(w http.ResponseWriter, r *http.Request) {
+		v, e := s.App.Sessions.History(r.PathValue("id"))
+		result(w, v, e)
+	})
 	m.HandleFunc("POST /api/sessions/{id}/{action}", func(w http.ResponseWriter, r *http.Request) {
 		v, e := s.App.Sessions.Command(r.Context(), r.PathValue("id"), r.PathValue("action"))
 		result(w, v, e)

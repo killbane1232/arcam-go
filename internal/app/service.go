@@ -36,19 +36,13 @@ func New(st *store.Store) (*Service, error) {
 	s := &Service{Store: st, LLM: llm.New(st), Sources: map[string]market.DataSource{"binance_spot": market.NewBinance(false), "binance_futures": market.NewBinance(true)}, ctx: ctx, cancel: cancel, jobs: map[string]context.CancelFunc{}, runProgress: map[string]runTelemetry{}, slots: make(chan struct{}, 2)}
 	ids, e := st.IDs("runs")
 	if e != nil {
+		cancel()
 		return nil, e
 	}
 	for _, id := range ids {
-		var r core.Run
-		if e = st.Get("runs", id, &r); e != nil {
+		if _, e = st.RecoverStatus("runs", id, []string{"running", "queued", "preparing"}, "interrupted", "service restarted; submit a new run"); e != nil {
+			cancel()
 			return nil, e
-		}
-		if r.Status == "running" || r.Status == "queued" || r.Status == "preparing" {
-			r.Status = "interrupted"
-			r.Error = "service restarted; submit a new run"
-			if e = st.Put("runs", id, r); e != nil {
-				return nil, e
-			}
 		}
 	}
 	return s, nil
